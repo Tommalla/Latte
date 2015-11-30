@@ -33,19 +33,23 @@ import ErrM
   '==' { PT _ (TS _ 18) }
   '>' { PT _ (TS _ 19) }
   '>=' { PT _ (TS _ 20) }
-  'boolean' { PT _ (TS _ 21) }
-  'else' { PT _ (TS _ 22) }
-  'false' { PT _ (TS _ 23) }
-  'if' { PT _ (TS _ 24) }
-  'int' { PT _ (TS _ 25) }
-  'return' { PT _ (TS _ 26) }
-  'string' { PT _ (TS _ 27) }
-  'true' { PT _ (TS _ 28) }
-  'void' { PT _ (TS _ 29) }
-  'while' { PT _ (TS _ 30) }
-  '{' { PT _ (TS _ 31) }
-  '||' { PT _ (TS _ 32) }
-  '}' { PT _ (TS _ 33) }
+  '[' { PT _ (TS _ 21) }
+  '[]' { PT _ (TS _ 22) }
+  ']' { PT _ (TS _ 23) }
+  'boolean' { PT _ (TS _ 24) }
+  'else' { PT _ (TS _ 25) }
+  'false' { PT _ (TS _ 26) }
+  'if' { PT _ (TS _ 27) }
+  'int' { PT _ (TS _ 28) }
+  'new' { PT _ (TS _ 29) }
+  'return' { PT _ (TS _ 30) }
+  'string' { PT _ (TS _ 31) }
+  'true' { PT _ (TS _ 32) }
+  'void' { PT _ (TS _ 33) }
+  'while' { PT _ (TS _ 34) }
+  '{' { PT _ (TS _ 35) }
+  '||' { PT _ (TS _ 36) }
+  '}' { PT _ (TS _ 37) }
 
 L_ident  { PT _ (TV $$) }
 L_integ  { PT _ (TI $$) }
@@ -102,7 +106,9 @@ ListType : {- empty -} { [] }
          | Type { (:[]) $1 }
          | Type ',' ListType { (:) $1 $3 }
 Expr6 :: { Expr }
-Expr6 : Ident { AbsLatte.EVar $1 }
+Expr6 : 'new' Type '[' Integer ']' { AbsLatte.ENewArr $2 $4 }
+      | Ident '[' Integer ']' { AbsLatte.EArrElem $1 $3 }
+      | Ident { AbsLatte.EVar $1 }
       | Integer { AbsLatte.ELitInt $1 }
       | 'true' { AbsLatte.ELitTrue }
       | 'false' { AbsLatte.ELitFalse }

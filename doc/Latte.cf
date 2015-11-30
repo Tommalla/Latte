@@ -60,9 +60,15 @@ Void.      Type ::= "void" ;
 
 internal   Fun. Type ::= Type "(" [Type] ")" ;
 
+internal   Array. Type ::= Type "[]";
+
 separator  Type "," ;
 
 -- Expressions ---------------------------------------------
+
+ENewArr.   Expr6 ::= "new" Type "[" Integer "]" ;
+
+EArrElem.  Expr6 ::= Ident "[" Integer "]" ;
 
 EVar.      Expr6 ::= Ident ;
 

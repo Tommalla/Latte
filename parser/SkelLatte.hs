@@ -49,8 +49,11 @@ transType x = case x of
   Bool -> failure x
   Void -> failure x
   Fun type_ types -> failure x
+  Array type_ -> failure x
 transExpr :: Expr -> Result
 transExpr x = case x of
+  ENewArr type_ integer -> failure x
+  EArrElem ident integer -> failure x
   EVar ident -> failure x
   ELitInt integer -> failure x
   ELitTrue -> failure x

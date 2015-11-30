@@ -33,16 +33,17 @@ The set of reserved words is the set of terminals appearing in the grammar. Thos
 
 The reserved words used in Latte are the following:
   | ``boolean`` | ``else`` | ``false`` | ``if``
-  | ``int`` | ``return`` | ``string`` | ``true``
-  | ``void`` | ``while`` |  | 
+  | ``int`` | ``new`` | ``return`` | ``string``
+  | ``true`` | ``void`` | ``while`` | 
 
 The symbols used in Latte are the following:
   | ( | ) | , | {
   | } | ; | = | ++
-  | -- | - | ! | &&
-  | || | + | * | /
-  | % | < | <= | >
-  | >= | == | != | 
+  | -- | [] | [ | ]
+  | - | ! | && | ||
+  | + | * | / | %
+  | < | <= | > | >=
+  | == | != |  | 
 
 ===Comments===
 Single-line comments begin with #, //.Multiple-line comments are  enclosed with /* and */.
@@ -87,7 +88,9 @@ All other symbols are terminals.
   | //[Type]// | -> | **eps**
   |  |  **|**  | //Type// 
   |  |  **|**  | //Type// ``,`` //[Type]// 
-  | //Expr6// | -> | //Ident// 
+  | //Expr6// | -> | ``new`` //Type// ``[`` //Integer// ``]`` 
+  |  |  **|**  | //Ident// ``[`` //Integer// ``]`` 
+  |  |  **|**  | //Ident// 
   |  |  **|**  | //Integer// 
   |  |  **|**  | ``true`` 
   |  |  **|**  | ``false`` 

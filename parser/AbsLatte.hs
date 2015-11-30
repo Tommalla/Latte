@@ -38,11 +38,13 @@ data Stmt
 data Item = NoInit Ident | Init Ident Expr
   deriving (Eq, Ord, Show, Read)
 
-data Type = Int | Str | Bool | Void | Fun Type [Type]
+data Type = Int | Str | Bool | Void | Fun Type [Type] | Array Type
   deriving (Eq, Ord, Show, Read)
 
 data Expr
-    = EVar Ident
+    = ENewArr Type Integer
+    | EArrElem Ident Integer
+    | EVar Ident
     | ELitInt Integer
     | ELitTrue
     | ELitFalse
