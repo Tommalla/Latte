@@ -1,4 +1,6 @@
+parser/TestLatte
 dist
+latc
 cabal-dev
 *.o
 *.hi
