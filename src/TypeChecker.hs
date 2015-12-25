@@ -25,11 +25,12 @@ typeCheck program = case fst (runState (runExceptT (checkProgram program)) Map.e
 checkProgram :: Program -> Eval ()
 checkProgram (Program topDefs) = do
     mapM_ (checkTopDef) topDefs
-    mainType <- getType (Ident "main")
+    mainType <- getExtType (Ident "main")
     case mainType of
         (FunType _ retType args block) -> do
             env <- get  -- We need current env b/c of declarations
-            checkFnInv retType args block
+            -- TODO no top-level args for now
+            checkFnInv retType [] [] block
         _ -> error $ "'main' is not a function. The actual type is: " ++ (show mainType)
 
 checkTopDef :: TopDef -> Eval ()
@@ -40,12 +41,53 @@ checkFnDef retType ident args block = do
     env <- get
     put $ Map.insert ident (FunType env retType args block) env
 
-getType :: Ident -> Eval ExtType
-getType ident = do
+getExtType :: Ident -> Eval ExtType
+getExtType ident = do
     env <- get
     case Map.lookup ident env of
         (Just t) -> return t
         Nothing -> error $ "Identifier " ++ (show ident) ++ " unknown"
 
-checkFnInv :: Type -> [Arg] -> Block -> Eval ()
-checkFnInv retType args block = return ()
+getType :: Ident -> Eval Type
+getType ident = do
+    extType <- getExtType ident
+    case extType of
+        (NormalType t) -> return t
+        _ -> error $ (show ident) ++ ": basic data type expected, found: " ++ (show extType)
+
+checkFnInv :: Type -> [Arg] -> [Ident] -> Block -> Eval ()
+checkFnInv retType args passedIdents block = do
+    env <- get
+    bindArgs args passedIdents
+    actRetType <- checkBlock block
+    put env
+    if retType == actRetType then
+        return ()
+    else error $ "TODO wrong return type " ++ (show retType) ++ " is not " ++ (show actRetType)
+
+bindArgs :: [Arg] -> [Ident] -> Eval ()
+bindArgs args passedIdents = mapM_ (\(arg, ident) -> bindArg arg ident) $ zip args passedIdents
+
+bindArg :: Arg -> Ident -> Eval ()
+bindArg (Arg t ident) passedIdent = do
+    env <- get
+    passedT <- getType passedIdent
+    if passedT == t then
+        put $ Map.insert ident (NormalType t) env
+    else error $ "TODO passed argument type does not match the declaration."
+
+checkBlock :: Block -> Eval Type
+checkBlock (Block stmts) = do
+    checkBlockHelper stmts
+    where
+        checkBlockHelper :: [Stmt] -> Eval Type
+        checkBlockHelper (stmt : t) = do
+            retType <- checkStmt stmt
+            case retType of
+                (Just result) -> return result
+                Nothing -> checkBlockHelper t
+        checkBlockHelper [] = error $ "TODO: No return in the block"
+
+checkStmt :: Stmt -> Eval (Maybe Type)
+checkStmt VRet = return (Just Void)
+checkStmt _ = return Nothing
