@@ -15,7 +15,9 @@ import PrintLatte
 data ExtType = NormalType Type | FunType Env Type [Arg] Block
     deriving (Eq, Show)
 data TypecheckError = ExactError String | IdentNotFound Ident | UnexpectedExtType Ident ExtType | 
-        UnexpectedRetType Type Type | ArgMismatch Arg | WrongArgsNo Int Int
+        UnexpectedRetType Type Type | UnexpectedType Type Type | ArgMismatch Arg | WrongArgsNo Int Int |
+        NotNumeric Type | NotBoolConvertible Type
+
     deriving (Eq, Show)
 type Env = Map.Map Ident ExtType
 type Eval a = ExceptT TypecheckError (State Env) a
@@ -79,10 +81,9 @@ bindArgs args passedIdents = do
 
 bindArg :: Arg -> Ident -> Eval ()
 bindArg (Arg t ident) passedIdent = do
-    env <- get
     passedT <- getType passedIdent
     if passedT == t then
-        put $ Map.insert ident (NormalType t) env
+        declare t ident
     else throwE (ArgMismatch (Arg t ident))
 
 checkBlock :: Block -> Eval Type
@@ -98,5 +99,67 @@ checkBlock (Block stmts) = do
         checkBlockHelper [] _ = return Void
 
 checkStmt :: Stmt -> Eval (Maybe Type)
+checkStmt Empty = return Nothing
+checkStmt (BStmt block) = do
+    env <- get
+    res <- checkBlock block
+    put env
+    return (Just res)
+checkStmt (Decl t items) = do
+    mapM_ (declareItem t) items
+    return Nothing
+checkStmt (Ass ident expr) = do
+    l <- getType ident
+    r <- checkExpr expr
+    if l == r then
+        return (Just l)
+    else throwE (UnexpectedType l r)
+checkStmt (Incr ident) = do
+    t <- getType ident
+    if isNumeric t then
+        return Nothing
+    else throwE (NotNumeric t)
+checkStmt (Decr ident) = checkStmt (Incr ident)
+checkStmt (Ret expr) = do
+    res <- checkExpr expr
+    return (Just res)
 checkStmt VRet = return (Just Void)
-checkStmt _ = return Nothing
+checkStmt (Cond expr stmt) = checkStmt (CondElse expr stmt Empty)
+checkStmt (CondElse expr stmtTrue stmtFalse) = do
+    condT <- checkExpr expr
+    if isBoolConvertible condT then do
+        env <- get
+        checkStmt stmtTrue
+        put env
+        checkStmt stmtFalse
+        put env
+        return Nothing
+    else throwE (NotBoolConvertible condT)
+checkStmt (While expr stmt) = checkStmt (Cond expr stmt)
+checkStmt (SExp expr) = do
+    res <- checkExpr expr
+    return (Just res)
+
+declareItem :: Type -> Item -> Eval ()
+declareItem t (NoInit ident) = declare t ident
+declareItem t (Init ident expr) = do
+    resT <- checkExpr expr
+    if resT == t then
+        declare t ident
+    else throwE (UnexpectedType t resT)
+
+declare :: Type -> Ident -> Eval ()
+declare t ident = do
+    env <- get
+    put $ Map.insert ident (NormalType t) env
+
+isNumeric :: Type -> Bool
+isNumeric Int = True
+isNumeric _ = False
+
+isBoolConvertible :: Type -> Bool
+isBoolConvertible Bool = True
+isBoolConvertible t = isNumeric t
+
+checkExpr :: Expr -> Eval Type
+checkExpr _ = return Int

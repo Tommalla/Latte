@@ -1,4 +1,16 @@
 void main() {
+    int a;
+    int b, c;
+    int d = 2;
 
+    if (d == 2) {
+        b = 3;
+    } else {
+        if (a == 0) {
+            while (c) {
+                c--;
+            }
+        }
+    }
 	return;
 }
