@@ -13,14 +13,19 @@ import ParLatte
 import PrintLatte
 
 data ExtType = NormalType Type | FunType Env Type [Arg] Block
-    deriving (Show)
+    deriving (Eq, Show)
+data TypecheckError = ExactError String | IdentNotFound Ident | UnexpectedExtType Ident ExtType | 
+        UnexpectedRetType Type Type | ArgMismatch Arg | WrongArgsNo Int Int
+    deriving (Eq, Show)
 type Env = Map.Map Ident ExtType
-type Eval a = ExceptT String (State Env) a
+type Eval a = ExceptT TypecheckError (State Env) a
 
 typeCheck :: Program -> Maybe String
 typeCheck program = case fst (runState (runExceptT (checkProgram program)) Map.empty) of
     (Right _) -> Nothing
-    (Left msg) -> Just msg
+    (Left exc) -> case exc of
+        (ExactError msg) -> Just msg
+        err -> Just $ "Unknown error at top level: " ++ (show err)
 
 checkProgram :: Program -> Eval ()
 checkProgram (Program topDefs) = do
@@ -30,8 +35,8 @@ checkProgram (Program topDefs) = do
         (FunType _ retType args block) -> do
             env <- get  -- We need current env b/c of declarations
             -- TODO no top-level args for now
-            checkFnInv retType [] [] block
-        _ -> error $ "'main' is not a function. The actual type is: " ++ (show mainType)
+            checkFnInv retType args [] block
+        _ -> throwE (ExactError $ "'main' is not a function. The actual type is: " ++ (show mainType))
 
 checkTopDef :: TopDef -> Eval ()
 checkTopDef (FnDef retType ident args block) = checkFnDef retType ident args block
@@ -46,14 +51,14 @@ getExtType ident = do
     env <- get
     case Map.lookup ident env of
         (Just t) -> return t
-        Nothing -> error $ "Identifier " ++ (show ident) ++ " unknown"
+        Nothing -> throwE (IdentNotFound ident)
 
 getType :: Ident -> Eval Type
 getType ident = do
     extType <- getExtType ident
     case extType of
         (NormalType t) -> return t
-        _ -> error $ (show ident) ++ ": basic data type expected, found: " ++ (show extType)
+        _ -> throwE (UnexpectedExtType ident extType)
 
 checkFnInv :: Type -> [Arg] -> [Ident] -> Block -> Eval ()
 checkFnInv retType args passedIdents block = do
@@ -63,10 +68,14 @@ checkFnInv retType args passedIdents block = do
     put env
     if retType == actRetType then
         return ()
-    else error $ "TODO wrong return type " ++ (show retType) ++ " is not " ++ (show actRetType)
+    else throwE (UnexpectedRetType retType actRetType)
 
 bindArgs :: [Arg] -> [Ident] -> Eval ()
-bindArgs args passedIdents = mapM_ (\(arg, ident) -> bindArg arg ident) $ zip args passedIdents
+bindArgs args passedIdents = do
+    let (argsCnt, passedCnt) = (length args, length passedIdents)
+    if argsCnt == passedCnt then
+        mapM_ (\(arg, ident) -> bindArg arg ident) $ zip args passedIdents
+    else throwE (WrongArgsNo argsCnt passedCnt)
 
 bindArg :: Arg -> Ident -> Eval ()
 bindArg (Arg t ident) passedIdent = do
@@ -74,19 +83,19 @@ bindArg (Arg t ident) passedIdent = do
     passedT <- getType passedIdent
     if passedT == t then
         put $ Map.insert ident (NormalType t) env
-    else error $ "TODO passed argument type does not match the declaration."
+    else throwE (ArgMismatch (Arg t ident))
 
 checkBlock :: Block -> Eval Type
 checkBlock (Block stmts) = do
-    checkBlockHelper stmts
+    checkBlockHelper stmts stmts
     where
-        checkBlockHelper :: [Stmt] -> Eval Type
-        checkBlockHelper (stmt : t) = do
+        checkBlockHelper :: [Stmt] -> [Stmt] -> Eval Type
+        checkBlockHelper (stmt : t) stmts = do
             retType <- checkStmt stmt
             case retType of
                 (Just result) -> return result
-                Nothing -> checkBlockHelper t
-        checkBlockHelper [] = error $ "TODO: No return in the block"
+                Nothing -> checkBlockHelper t stmts
+        checkBlockHelper [] _ = return Void
 
 checkStmt :: Stmt -> Eval (Maybe Type)
 checkStmt VRet = return (Just Void)
