@@ -12,8 +12,8 @@ import LexLatte
 import ParLatte
 import PrintLatte
 
-data TypecheckError = ExactError String | IdentNotFound Ident | UnexpectedRetType Type Type | UnexpectedType Type Type | ArgMismatch Arg | WrongArgsNo Int Int |
-        NotNumeric Type | NotBoolConvertible Type | NotAnArray Ident
+data TypecheckError = ExactError String | IdentNotFound Ident | UnexpectedRetType Type Type | UnexpectedType Type Type | 
+        ArgMismatch Arg | WrongArgsNo Int Int | NotNumeric Type | NotBoolConvertible Type | NotAnArray Ident
     deriving (Eq, Show)
 type FunType = (Env, Type, [Arg], Block)
 type PEnv = Map.Map Ident FunType
@@ -178,4 +178,37 @@ checkExpr ELitFalse = return Bool
 checkExpr (EApp ident exprs) = do 
    passedTypes <- mapM (checkExpr) exprs
    checkFnApp ident passedTypes
-checkExpr _ = return Int
+checkExpr (EString _) = return Str
+checkExpr (Neg expr) = do
+    t <- checkExpr expr
+    if isNumeric t then
+        return Bool
+    else throwE (NotNumeric t)
+checkExpr (Not expr) = do
+    t <- checkExpr expr
+    if isBoolConvertible t then
+        return Bool
+    else throwE (NotBoolConvertible t)
+checkExpr (EMul expr1 _ expr2) = checkArithmeticExpr expr1 expr2
+checkExpr (EAdd expr1 _ expr2) = checkArithmeticExpr expr1 expr2
+checkExpr (ERel expr1 _ expr2) = checkArithmeticExpr expr1 expr2
+checkExpr (EAnd expr1 expr2) = checkBoolExpr expr1 expr2
+checkExpr (EOr expr1 expr2) = checkBoolExpr expr1 expr2
+
+checkArithmeticExpr :: Expr -> Expr -> Eval Type
+checkArithmeticExpr expr1 expr2 = do
+    t1 <- checkExpr expr1
+    t2 <- checkExpr expr2
+    if t1 == t2 then  -- TODO allow conversions
+        if isNumeric t1 then
+            return t1
+        else throwE (NotNumeric t1)
+    else throwE (UnexpectedType t1 t2)
+
+checkBoolExpr :: Expr -> Expr -> Eval Type
+checkBoolExpr expr1 expr2 = do
+    t1 <- checkExpr expr1
+    t2 <- checkExpr expr2
+    if (isBoolConvertible t1) && (isBoolConvertible t2) then
+        return Bool
+    else throwE (UnexpectedType t1 t2)
