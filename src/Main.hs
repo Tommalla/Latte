@@ -10,6 +10,7 @@ main = do
     case inputFiles of
         [inputFile] -> do
             code <- readFile inputFile
-            case compile code of 
+            compileRes <- compile code inputFile
+            case compileRes of
                 Just err -> putStrLn err
                 Nothing -> return ()
