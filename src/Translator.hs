@@ -8,5 +8,14 @@ import LexLatte
 import ParLatte
 import PrintLatte
 
+data Code = NoIndent String | Indent String
+
+instance Show Code where
+    show (NoIndent str) = str
+    show (Indent str) = "  " ++ str
+
 translate :: Program -> String
-translate (Program topDefs) = "TODO"
+translate = show . translateProgram 
+
+translateProgram :: Program -> Code
+translateProgram (Program topDefs) = Indent "TODO"
