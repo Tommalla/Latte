@@ -31,7 +31,7 @@ unpackIdent :: Ident -> String
 unpackIdent (Ident str) = str
 
 translate :: Program -> String
-translate program = show $ fst (runState (translateProgram program) Map.empty)
+translate program = ".globl main\n\n" ++ (show $ fst (runState (translateProgram program) Map.empty)) ++ "\n"
 
 translateProgram :: Program -> Translation Code
 translateProgram (Program topDefs) = do

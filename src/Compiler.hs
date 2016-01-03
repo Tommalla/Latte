@@ -4,6 +4,7 @@ module Compiler where
 
 import Data.List
 import Data.List.Split
+import System.Process
 
 import AbsLatte
 import ErrM
@@ -26,9 +27,12 @@ compile code inputFile = do
                 let path = intercalate "/" $ take (length pathSplit - 1) pathSplit
                 let newPath = path ++ (if path == "" then "" else "/") ++ className
                 let asmPath = (newPath ++ ".s")
+                let compileCmd = "gcc -m32 " ++ asmPath
                 putStrLn $ "Writing to: " ++ asmPath
                 writeFile asmPath res
-                -- TODO execute compilation
+                putStrLn $ "Running compiler:\n\t" ++ compileCmd
+                system $ compileCmd
+                putStrLn "Done."
                 return Nothing
             err -> return err
 
