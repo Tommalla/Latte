@@ -44,14 +44,15 @@ translateTopDef (FnDef t ident args block) = do
     let header = NoIndent $ (unpackIdent ident) ++ ":"
     env <- get
     bindArgs args
-    translateBlock block
+    blockCode <- translateBlock block
     put env
-    return $ CodeBlock [header, entryProtocol, leaveProtocol]
+    return $ CodeBlock [header, entryProtocol, blockCode, leaveProtocol]
 
 translateBlock :: Block -> Translation Code
 translateBlock (Block stmts) = do
-    -- TODO: allocate vars before the body
-    return (Indent "noop")
+    allocation <- allocVars stmts
+    -- TODO actual stmts
+    return $ CodeBlock [allocation]
 
 -- Binds the args in the environment and returns the total size allocated (in Bytes)
 bindArgs :: [Arg] -> Translation Int
@@ -69,6 +70,36 @@ bindArgs args = bindArgsHelper 0 args
 getSize :: Type -> Int
 getSize Int = 4
 getSize Bool = 1
-getSize _ = undefined
+getSize _ = 0   -- TODO
 
+allocVars :: [Stmt] -> Translation Code
+allocVars stmts = do
+    size <- allocVarsHelper 0 stmts
+    return $ Indent ("movl $" ++ (show size) ++ ", %esp")
+    where
+    allocVarsHelper :: Int -> [Stmt] -> Translation Int
+    allocVarsHelper lastSize (h:rest) = do
+        case h of
+            (Decl t items) -> do
+                let size = getSize t
+                newSize <- allocItems lastSize size items
+                allocVarsHelper newSize rest
+            _ -> allocVarsHelper lastSize rest
+    allocVarsHelper res [] = return res
+
+allocItems :: Int -> Int -> [Item] -> Translation Int
+allocItems lastSize size (h:t) = do
+    nextS <- allocItem lastSize size h
+    allocItems nextS size t
+allocItems res _ [] = return res
+
+allocItem :: Int -> Int -> Item -> Translation Int
+allocItem lastSize size item = do
+    env <- get
+    put $ Map.insert (getIdent item) (lastSize + size) env
+    return $ lastSize + size
+
+getIdent :: Item -> Ident
+getIdent (NoInit res) = res
+getIdent (Init res _) = res
 

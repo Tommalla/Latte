@@ -6,7 +6,7 @@ void main() {
     int a;
     int b, c;
     int d = 2;
-    string nope;
+    // string nope;
 
     if (d == 2) {
         b = 3;
