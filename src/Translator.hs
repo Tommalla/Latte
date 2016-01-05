@@ -13,7 +13,7 @@ import PrintLatte
 
 data Code = NoIndent String | Indent String | CodeBlock [Code]
 type Env = Map.Map Ident Int
-type Translation a = State Env a
+type Translation a = State (Env, Int) a
 
 
 instance Show Code where
@@ -32,7 +32,7 @@ unpackIdent :: Ident -> String
 unpackIdent (Ident str) = str
 
 translate :: Program -> String
-translate program = ".globl main\n\n" ++ (show $ fst (runState (translateProgram program) Map.empty)) ++ "\n"
+translate program = ".globl main\n\n" ++ (show $ fst (runState (translateProgram program) (Map.empty, 0))) ++ "\n"
 
 translateProgram :: Program -> Translation Code
 translateProgram (Program topDefs) = do
@@ -42,17 +42,24 @@ translateProgram (Program topDefs) = do
 translateTopDef :: TopDef -> Translation Code
 translateTopDef (FnDef t ident args block) = do
     let header = NoIndent $ (unpackIdent ident) ++ ":"
-    env <- get
+    mem <- get
     bindArgs args
     blockCode <- translateBlock block
-    put env
+    put mem
     return $ CodeBlock [header, entryProtocol, blockCode, leaveProtocol]
 
 translateBlock :: Block -> Translation Code
 translateBlock (Block stmts) = do
+    (env, size) <- get
     allocation <- allocVars stmts
-    -- TODO actual stmts
-    return $ CodeBlock [allocation]
+    -- At this point all is allocated, but we need to restore the env
+    put (env, size)
+    code <- mapM (translateStmt) stmts
+    return $ CodeBlock (allocation:code)
+
+translateStmt :: Stmt -> Translation Code
+translateStmt Empty = return $ Indent "nop"
+translateStmt _ = return $ Indent "nop"
 
 -- Binds the args in the environment and returns the total size allocated (in Bytes)
 bindArgs :: [Arg] -> Translation Int
@@ -61,8 +68,8 @@ bindArgs args = bindArgsHelper 0 args
     bindArgsHelper :: Int -> [Arg] -> Translation Int
     bindArgsHelper lastSize ((Arg t ident):rest) = do
         let allocSize = getSize t
-        env <- get
-        put $ Map.insert ident (lastSize - allocSize) env
+        (env, maxSize) <- get
+        put (Map.insert ident (lastSize - allocSize) env, maxSize)
         bindArgsHelper (lastSize - allocSize) rest
     bindArgsHelper res [] = return res
 
@@ -84,6 +91,9 @@ allocVars stmts = do
                 let size = getSize t
                 newSize <- allocItems lastSize size items
                 allocVarsHelper newSize rest
+            (BStmt (Block nextStmts)) -> do
+                newSize <- allocVarsHelper lastSize nextStmts
+                allocVarsHelper newSize rest
             _ -> allocVarsHelper lastSize rest
     allocVarsHelper res [] = return res
 
@@ -95,8 +105,8 @@ allocItems res _ [] = return res
 
 allocItem :: Int -> Int -> Item -> Translation Int
 allocItem lastSize size item = do
-    env <- get
-    put $ Map.insert (getIdent item) (lastSize + size) env
+    (env, maxSize) <- get
+    put (Map.insert (getIdent item) (lastSize + size) env, max maxSize (lastSize + size))
     return $ lastSize + size
 
 getIdent :: Item -> Ident
