@@ -8,6 +8,8 @@ void main() {
     int d = 2;
     // string nope;
 
+    a = 0;
+
     if (d == 2) {
         b = 3;
     } else {

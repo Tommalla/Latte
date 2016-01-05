@@ -182,7 +182,7 @@ checkExpr (EString _) = return Str
 checkExpr (Neg expr) = do
     t <- checkExpr expr
     if isNumeric t then
-        return Bool
+        return Int
     else throwE (NotNumeric t)
 checkExpr (Not expr) = do
     t <- checkExpr expr
