@@ -14,7 +14,7 @@ import PrintLatte
 data Code = NoIndent String | Indent String | CodeBlock [Code] | Noop
 data MetaOp = Mul MulOp | Add AddOp | Rel RelOp
 type Env = Map.Map Ident Int
-type Translation a = State (Env, Int) a
+type Translation a = State (Env, Int, Int) a  -- Env, Local stack size, Max label number
 
 
 instance Show Code where
@@ -34,7 +34,7 @@ unpackIdent :: Ident -> String
 unpackIdent (Ident str) = str
 
 translate :: Program -> String
-translate program = ".globl main\n\n" ++ (show $ fst (runState (translateProgram program) (Map.empty, 0))) ++ "\n"
+translate program = ".globl main\n\n" ++ (show $ fst (runState (translateProgram program) (Map.empty, 0, 0))) ++ "\n"
 
 translateProgram :: Program -> Translation Code
 translateProgram (Program topDefs) = do
@@ -52,10 +52,10 @@ translateTopDef (FnDef t ident args block) = do
 
 translateBlock :: Block -> Translation Code
 translateBlock (Block stmts) = do
-    (env, size) <- get
+    mem <- get
     allocation <- allocVars stmts
     -- At this point all is allocated, but we need to restore the env
-    put (env, size)
+    put mem
     code <- mapM (translateStmt) stmts
     return $ CodeBlock (allocation:code)
 
@@ -65,7 +65,7 @@ translateStmt (BStmt (Block stmts)) = do
     res <- mapM (translateStmt) stmts
     return $ CodeBlock res
 translateStmt (Decl t items) = do
-    (env, size) <- get
+    (_, size, _) <- get
     let tSize = getSize t
     allocItems size tSize items
     return Noop
@@ -118,7 +118,10 @@ translateMetaOp (Mul mop) = do
 translateMetaOp (Add aop) = return $ case aop of
             Plus -> CodeBlock [Indent "popl %eax", Indent "addl 0(%esp), %eax", Indent "pushl %eax"]
             Minus -> CodeBlock [Indent "popl %eax", Indent "popl %ebx", Indent "subl %eax, %ebx", Indent "pushl %ebx"]
-translateMetaOp (Rel rop) = return Noop -- TODO
+translateMetaOp (Rel rop) = do
+    let middle = Noop
+    -- TODO finish this once you have an idea.
+    return $ CodeBlock [Indent "popl %eax", Indent "cmp %eax, 0(%esp)", middle]
 
 getVarCode :: Ident -> Translation String
 getVarCode ident = do
@@ -127,7 +130,7 @@ getVarCode ident = do
 
 getVarIdx :: Ident -> Translation Int
 getVarIdx ident = do
-    (env, _) <- get
+    (env, _, _) <- get
     return $ env Map.! ident
 
 -- Binds the args in the environment and returns the total size allocated (in Bytes)
@@ -137,8 +140,8 @@ bindArgs args = bindArgsHelper 0 args
     bindArgsHelper :: Int -> [Arg] -> Translation Int
     bindArgsHelper lastSize ((Arg t ident):rest) = do
         let allocSize = getSize t
-        (env, maxSize) <- get
-        put (Map.insert ident (lastSize + allocSize) env, maxSize)
+        (env, maxSize, nextLabel) <- get
+        put (Map.insert ident (lastSize + allocSize) env, maxSize, nextLabel)
         bindArgsHelper (lastSize + allocSize) rest
     bindArgsHelper res [] = return res
 
@@ -174,11 +177,16 @@ allocItems res _ [] = return res
 
 allocItem :: Int -> Int -> Item -> Translation Int
 allocItem lastSize size item = do
-    (env, maxSize) <- get
-    put (Map.insert (getIdent item) (lastSize - size) env, max maxSize (lastSize - size))
+    (env, maxSize, nextLabel) <- get
+    put (Map.insert (getIdent item) (lastSize - size) env, max maxSize (lastSize - size), nextLabel)
     return $ lastSize - size
 
 getIdent :: Item -> Ident
 getIdent (NoInit res) = res
 getIdent (Init res _) = res
 
+getNextLabel :: Translation Int
+getNextLabel = do
+    (env, maxSize, nextLabel) <- get
+    put (env, maxSize, nextLabel + 1)
+    return nextLabel
