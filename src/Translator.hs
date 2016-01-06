@@ -94,12 +94,22 @@ translateExpr (Neg expr) = do
 translateExpr (Not expr) = do
     exprCode <- translateExpr expr
     return $ CodeBlock [exprCode, Indent "pop %eax", Indent "not %eax", Indent "push %eax"]
+translateExpr (EMul expr1 mop expr2) = do
+    expr1Code <- translateExpr expr1
+    expr2Code <- translateExpr expr2
+    let divOp = [Indent "popl %ebx", Indent "popl %eax", Indent "movl %eax, %edx", Indent "shr $31, %edx", 
+                 Indent "idiv %ebx"]
+    let opCode = case mop of
+            Times -> CodeBlock [Indent "popl %eax", Indent "imul 0(%esp), %eax", Indent "pushl %eax"]
+            Div -> CodeBlock [CodeBlock divOp, Indent "pushl %eax"]
+            Mod -> CodeBlock [CodeBlock divOp, Indent "pushl %edx"]
+    return $ CodeBlock [expr1Code, expr2Code, opCode]
 translateExpr _ = return Noop
 
 getVarCode :: Ident -> Translation String
 getVarCode ident = do
     offset <- getVarIdx ident
-    return $ (show offset) ++ "(%esp)"
+    return $ (show offset) ++ "(%ebp)"
 
 getVarIdx :: Ident -> Translation Int
 getVarIdx ident = do
@@ -114,8 +124,8 @@ bindArgs args = bindArgsHelper 0 args
     bindArgsHelper lastSize ((Arg t ident):rest) = do
         let allocSize = getSize t
         (env, maxSize) <- get
-        put (Map.insert ident (lastSize - allocSize) env, maxSize)
-        bindArgsHelper (lastSize - allocSize) rest
+        put (Map.insert ident (lastSize + allocSize) env, maxSize)
+        bindArgsHelper (lastSize + allocSize) rest
     bindArgsHelper res [] = return res
 
 -- Returns the variable size in bytes.
@@ -127,7 +137,7 @@ getSize _ = 0   -- TODO
 allocVars :: [Stmt] -> Translation Code
 allocVars stmts = do
     size <- allocVarsHelper 0 stmts
-    return $ Indent ("addl $" ++ (show size) ++ ", %esp")
+    return $ Indent ("subl $" ++ (show (-size)) ++ ", %esp")
     where
     allocVarsHelper :: Int -> [Stmt] -> Translation Int
     allocVarsHelper lastSize (h:rest) = do
@@ -151,8 +161,8 @@ allocItems res _ [] = return res
 allocItem :: Int -> Int -> Item -> Translation Int
 allocItem lastSize size item = do
     (env, maxSize) <- get
-    put (Map.insert (getIdent item) (lastSize + size) env, max maxSize (lastSize + size))
-    return $ lastSize + size
+    put (Map.insert (getIdent item) (lastSize - size) env, max maxSize (lastSize - size))
+    return $ lastSize - size
 
 getIdent :: Item -> Ident
 getIdent (NoInit res) = res

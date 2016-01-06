@@ -1,3 +1,4 @@
+*.s
 parser/TestLatte
 dist
 latc

@@ -12,5 +12,5 @@ main = do
             code <- readFile inputFile
             compileRes <- compile code inputFile
             case compileRes of
-                Just err -> putStrLn err
+                Just err -> putStrLn $ "ERROR\n" ++ err
                 Nothing -> return ()
