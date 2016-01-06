@@ -12,6 +12,7 @@ import ParLatte
 import PrintLatte
 
 data Code = NoIndent String | Indent String | CodeBlock [Code] | Noop
+data MetaOp = Mul MulOp | Add AddOp | Rel RelOp
 type Env = Map.Map Ident Int
 type Translation a = State (Env, Int) a
 
@@ -94,17 +95,30 @@ translateExpr (Neg expr) = do
 translateExpr (Not expr) = do
     exprCode <- translateExpr expr
     return $ CodeBlock [exprCode, Indent "pop %eax", Indent "not %eax", Indent "push %eax"]
-translateExpr (EMul expr1 mop expr2) = do
+translateExpr (EMul expr1 mop expr2) = translateBinaryOp expr1 expr2 (Mul mop)
+translateExpr (EAdd expr1 aop expr2) = translateBinaryOp expr1 expr2 (Add aop)
+translateExpr (ERel expr1 rop expr2) = translateBinaryOp expr1 expr2 (Rel rop)
+translateExpr _ = return Noop
+
+translateBinaryOp :: Expr -> Expr -> MetaOp -> Translation Code
+translateBinaryOp expr1 expr2 metaOp = do
     expr1Code <- translateExpr expr1
     expr2Code <- translateExpr expr2
+    opCode <- translateMetaOp metaOp
+    return $ CodeBlock [expr1Code, expr2Code, opCode]
+
+translateMetaOp :: MetaOp -> Translation Code
+translateMetaOp (Mul mop) = do
     let divOp = [Indent "popl %ebx", Indent "popl %eax", Indent "movl %eax, %edx", Indent "shr $31, %edx", 
                  Indent "idiv %ebx"]
-    let opCode = case mop of
+    return $ case mop of
             Times -> CodeBlock [Indent "popl %eax", Indent "imul 0(%esp), %eax", Indent "pushl %eax"]
             Div -> CodeBlock [CodeBlock divOp, Indent "pushl %eax"]
             Mod -> CodeBlock [CodeBlock divOp, Indent "pushl %edx"]
-    return $ CodeBlock [expr1Code, expr2Code, opCode]
-translateExpr _ = return Noop
+translateMetaOp (Add aop) = return $ case aop of
+            Plus -> CodeBlock [Indent "popl %eax", Indent "addl 0(%esp), %eax", Indent "pushl %eax"]
+            Minus -> CodeBlock [Indent "popl %eax", Indent "popl %ebx", Indent "subl %eax, %ebx", Indent "pushl %ebx"]
+translateMetaOp (Rel rop) = return Noop -- TODO
 
 getVarCode :: Ident -> Translation String
 getVarCode ident = do
