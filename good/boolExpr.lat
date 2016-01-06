@@ -1,0 +1,11 @@
+void main() {
+    boolean a;
+    a = true;
+    boolean b;
+    b = false;
+    boolean c;
+    c = a && b;
+    boolean d;
+    d = false && a;
+    d = d || true;
+}

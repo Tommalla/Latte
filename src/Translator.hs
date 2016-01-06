@@ -98,7 +98,24 @@ translateExpr (Not expr) = do
 translateExpr (EMul expr1 mop expr2) = translateBinaryOp expr1 expr2 (Mul mop)
 translateExpr (EAdd expr1 aop expr2) = translateBinaryOp expr1 expr2 (Add aop)
 translateExpr (ERel expr1 rop expr2) = translateBinaryOp expr1 expr2 (Rel rop)
-translateExpr _ = return Noop
+translateExpr (EAnd expr1 expr2) = do
+    expr1Code <- translateExpr expr1
+    expr2Code <- translateExpr expr2
+    lFalse <- getNextLabel
+    lExit <- getNextLabel
+    let checkRes = CodeBlock [Indent "popl %eax", Indent "testl %eax, %eax", Indent $ "jz " ++ (getLabel lFalse)]
+    let labelFalse = CodeBlock [NoIndent $ (getLabel lFalse) ++ ":", Indent $ "pushl $0"]
+    return $ CodeBlock [expr1Code, checkRes, expr2Code, checkRes, Indent "pushl $1", 
+                        Indent $ "jmp "++ (getLabel lExit), labelFalse, NoIndent $ (getLabel lExit) ++ ":"]
+translateExpr (EOr expr1 expr2) = do
+    expr1Code <- translateExpr expr1
+    expr2Code <- translateExpr expr2
+    lTrue <- getNextLabel
+    lExit <- getNextLabel
+    let checkRes = CodeBlock [Indent "popl %eax", Indent "testl %eax, %eax", Indent $ "jnz " ++ (getLabel lTrue)]
+    let labelTrue = CodeBlock [NoIndent $ (getLabel lTrue) ++ ":", Indent "pushl $1"]
+    return $ CodeBlock [expr1Code, checkRes, expr2Code, checkRes, Indent "pushl $0", 
+                        Indent $ "jmp " ++ (getLabel lExit), labelTrue, NoIndent $ (getLabel lExit) ++ ":"]
 
 translateBinaryOp :: Expr -> Expr -> MetaOp -> Translation Code
 translateBinaryOp expr1 expr2 metaOp = do
@@ -119,9 +136,16 @@ translateMetaOp (Add aop) = return $ case aop of
             Plus -> CodeBlock [Indent "popl %eax", Indent "addl 0(%esp), %eax", Indent "pushl %eax"]
             Minus -> CodeBlock [Indent "popl %eax", Indent "popl %ebx", Indent "subl %eax, %ebx", Indent "pushl %ebx"]
 translateMetaOp (Rel rop) = do
-    let middle = Noop
-    -- TODO finish this once you have an idea.
-    return $ CodeBlock [Indent "popl %eax", Indent "cmp %eax, 0(%esp)", middle]
+    lFalse <- getNextLabel
+    let jmp = case rop of
+            LTH -> "jge"
+            LE -> "jg"
+            GTH -> "jle"
+            GE -> "jl"
+            EQU -> "jne"
+            NE -> "je"
+    return $ CodeBlock [Indent "popl %eax", Indent "cmp %eax, 0(%esp)", Indent $ jmp ++ " " ++ (getLabel lFalse),
+                        Indent "push $1", NoIndent $ (getLabel lFalse) ++ ":"]
 
 getVarCode :: Ident -> Translation String
 getVarCode ident = do
@@ -148,7 +172,7 @@ bindArgs args = bindArgsHelper 0 args
 -- Returns the variable size in bytes.
 getSize :: Type -> Int
 getSize Int = 4
-getSize Bool = 1
+getSize Bool = 4    -- Yes, let's use ints for now for consistency [FIXME]
 getSize _ = 0   -- TODO
 
 allocVars :: [Stmt] -> Translation Code
@@ -190,3 +214,6 @@ getNextLabel = do
     (env, maxSize, nextLabel) <- get
     put (env, maxSize, nextLabel + 1)
     return nextLabel
+
+getLabel :: Int -> String
+getLabel idx = ".L" ++ (show idx)
