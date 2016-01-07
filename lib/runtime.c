@@ -5,11 +5,11 @@
 #include <string.h>
 
 extern void printInt(int a) {
-    printf("%d", a);
+    printf("%d\n", a);
 }
 
 extern void printString(const char* str) {
-    printf("%s", str);
+    printf("%s\n", str);
 }
 
 void error() {
@@ -26,6 +26,6 @@ int readInt() {
 char* readString() {
     char* res = (char*)malloc(10);
     size_t len;
-    getline(&res, &len, stdin); 
+    getline(&res, &len, stdin);
     return res;
 }

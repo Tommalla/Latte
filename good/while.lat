@@ -1,0 +1,24 @@
+int main() {
+    int x;
+    int res;
+
+    x = 3;
+    res = 0;
+
+    while (x) {
+        printInt(x);
+        res++;
+        x--;
+    }
+
+    printInt(res);
+
+    while (x >= -3) {
+        printInt(x);
+        res--;
+        x--;
+    }
+
+    printInt(res);
+    return 0;
+}

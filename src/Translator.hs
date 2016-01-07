@@ -96,7 +96,7 @@ translateStmt (Cond expr stmt) = do
     lExit <- getNextLabel
     stmtCode <- translateStmt stmt
     let jmp = CodeBlock [Indent "popl %eax", Indent "testl %eax, %eax", Indent $ "jz " ++ (getLabel lExit)]
-    return $ CodeBlock [exprCode, jmp, stmtCode, NoIndent $ (getLabel lExit) ++ ":"]
+    return $ CodeBlock [exprCode, jmp, stmtCode, getLabelCode lExit]
 translateStmt (CondElse expr stmt1 stmt2) = do
     exprCode <- translateExpr expr
     lTrue <- getNextLabel
@@ -105,10 +105,16 @@ translateStmt (CondElse expr stmt1 stmt2) = do
     stmt2Code <- translateStmt stmt2
     let jmp = CodeBlock [Indent "popl %eax", Indent "testl %eax, %eax", Indent $ "jnz " ++ (getLabel lTrue)]
     return $ CodeBlock [exprCode, jmp, stmt2Code, Indent $ "jmp " ++ (getLabel lExit),
-                        NoIndent $ (getLabel lTrue) ++ ":", stmt1Code, NoIndent $ (getLabel lExit) ++ ":"]
--- TODO if; if else; while
+                        getLabelCode lTrue, stmt1Code, getLabelCode lExit]
+translateStmt (While expr stmt) = do
+    exprCode <- translateExpr expr
+    lBegin <- getNextLabel
+    lExit <- getNextLabel
+    stmtCode <- translateStmt stmt
+    let jmp = CodeBlock [Indent "popl %eax", Indent "testl %eax, %eax", Indent $ "jz " ++ (getLabel lExit)]
+    return $ CodeBlock [getLabelCode lBegin, exprCode, jmp, stmtCode, Indent $ "jmp " ++ (getLabel lBegin),
+                        getLabelCode lExit]
 translateStmt (SExp expr) = translateExpr expr
-translateStmt _ = return Noop
 
 -- Invariant: Every expression ends with pushing the result on the stack
 translateExpr :: Expr -> Translation Code
@@ -172,6 +178,7 @@ translateMetaOp (Add aop) = return $ case aop of
             Minus -> CodeBlock [Indent "popl %eax", Indent "popl %ebx", Indent "subl %eax, %ebx", Indent "pushl %ebx"]
 translateMetaOp (Rel rop) = do
     lFalse <- getNextLabel
+    lExit <- getNextLabel
     let jmp = case rop of
             LTH -> "jge"
             LE -> "jg"
@@ -180,7 +187,8 @@ translateMetaOp (Rel rop) = do
             EQU -> "jne"
             NE -> "je"
     return $ CodeBlock [Indent "popl %eax", Indent "cmp %eax, 0(%esp)", Indent $ jmp ++ " " ++ (getLabel lFalse),
-                        Indent "push $1", NoIndent $ (getLabel lFalse) ++ ":"]
+                        Indent "pushl $1", Indent $ "jmp " ++ (getLabel lExit), getLabelCode lFalse, Indent "pushl $0",
+                        getLabelCode lExit]
 
 getVarCode :: Ident -> Translation String
 getVarCode ident = do
@@ -255,3 +263,6 @@ getNextLabel = do
 
 getLabel :: Int -> String
 getLabel idx = ".L" ++ (show idx)
+
+getLabelCode :: Int -> Code
+getLabelCode idx = NoIndent $ (getLabel idx) ++ ":"
