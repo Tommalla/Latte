@@ -1,7 +1,7 @@
-all: latc
+all: latc_x86
 
-latc: Main.hs Compiler.hs TypeChecker.hs
-	ghc Main.hs -i../parser -o ../latc
+latc_x86: Main.hs Compiler.hs TypeChecker.hs
+	ghc Main.hs -i../parser -o ../latc_x86
 
 clean:
 	rm -rf *.o *.hi

@@ -7,3 +7,4 @@ clean:
 	cd parser && $(MAKE) clean
 	cd src && $(MAKE) clean
 	cd lib && $(MAKE) clean
+	rm -rf latc_x86
