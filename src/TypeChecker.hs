@@ -29,6 +29,12 @@ typeCheck program = case fst (runState (runExceptT (checkProgram program)) (Map.
 
 checkProgram :: Program -> Eval ()
 checkProgram (Program topDefs) = do
+    let builtins = [(Void, "printInt", [Arg Int $ Ident ""]), 
+                    (Void, "printString", [Arg Str $ Ident ""]),
+                    (Void, "error", []),
+                    (Int, "readInt", []),
+                    (Str, "readString", [])]
+    mapM_ (\(t, name, args) -> checkFnDef t (Ident name) args (Block [Empty])) builtins 
     mapM_ (checkTopDef) topDefs
     checkFnApp (Ident "main") []  -- TODO toplevel args still unsupported
     return ()

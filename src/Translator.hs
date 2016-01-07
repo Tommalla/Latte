@@ -14,7 +14,7 @@ import PrintLatte
 data Code = NoIndent String | Indent String | CodeBlock [Code] | Noop
 data MetaOp = Mul MulOp | Add AddOp | Rel RelOp
 type Env = Map.Map Ident Int
-type Translation a = State (Env, Int, Int) a  -- Env, Local stack size, Max label number
+type Translation a = State (Env, Int, Int) a  -- Env, -Local stack size, Max label number
 
 
 instance Show Code where
@@ -73,6 +73,7 @@ translateStmt (Ass ident expr) = do
     exprCode <- translateExpr expr
     varCode <- getVarCode ident
     return $ CodeBlock [exprCode, Indent $ "popl " ++ varCode]
+translateStmt (SExp expr) = translateExpr expr
 translateStmt _ = return Noop
 
 -- Invariant: Every expression ends with pushing the result on the stack
@@ -164,8 +165,8 @@ bindArgs args = bindArgsHelper 0 args
     bindArgsHelper :: Int -> [Arg] -> Translation Int
     bindArgsHelper lastSize ((Arg t ident):rest) = do
         let allocSize = getSize t
-        (env, maxSize, nextLabel) <- get
-        put (Map.insert ident (lastSize + allocSize) env, maxSize, nextLabel)
+        (env, minSize, nextLabel) <- get
+        put (Map.insert ident (lastSize + allocSize) env, minSize, nextLabel)
         bindArgsHelper (lastSize + allocSize) rest
     bindArgsHelper res [] = return res
 
@@ -201,8 +202,8 @@ allocItems res _ [] = return res
 
 allocItem :: Int -> Int -> Item -> Translation Int
 allocItem lastSize size item = do
-    (env, maxSize, nextLabel) <- get
-    put (Map.insert (getIdent item) (lastSize - size) env, max maxSize (lastSize - size), nextLabel)
+    (env, minSize, nextLabel) <- get
+    put (Map.insert (getIdent item) (lastSize - size) env, min minSize (lastSize - size), nextLabel)
     return $ lastSize - size
 
 getIdent :: Item -> Ident
@@ -211,8 +212,8 @@ getIdent (Init res _) = res
 
 getNextLabel :: Translation Int
 getNextLabel = do
-    (env, maxSize, nextLabel) <- get
-    put (env, maxSize, nextLabel + 1)
+    (env, minSize, nextLabel) <- get
+    put (env, minSize, nextLabel + 1)
     return nextLabel
 
 getLabel :: Int -> String

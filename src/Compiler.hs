@@ -27,7 +27,7 @@ compile code inputFile = do
                 let path = intercalate "/" $ take (length pathSplit - 1) pathSplit
                 let newPath = path ++ (if path == "" then "" else "/") ++ className
                 let asmPath = (newPath ++ ".s")
-                let compileCmd = "gcc -m32 " ++ asmPath ++ " -o " ++ newPath
+                let compileCmd = "g++ -m32 lib/runtime.o " ++ asmPath ++ " -o " ++ newPath
                 putStrLn $ "OK"
                 putStrLn $ "Writing to: " ++ asmPath
                 writeFile asmPath res

@@ -8,10 +8,15 @@ void main() {
     int d = 2;
     // string nope;
 
+    b = 1;
     a = 0;
+
+    printInt(b);
+    printInt(a);
 
     if (d == 2) {
         b = 3;
+        printInt(b);
     } else {
         if (a == 0) {
             while (c) {
@@ -25,6 +30,8 @@ void main() {
     }
 
     d = foo(b);
+
+    printInt(d);
 
 	return;
 }
