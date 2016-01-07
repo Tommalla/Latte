@@ -9,7 +9,9 @@ void main() {
     int a;
     int b = 1, c;
     int d = 2;
-    // string nope;
+    string nope = "asd";
+    string wut = "foo";
+    // string nopeWut = nope + wut;
 
     printInt(b);
     printInt(a);

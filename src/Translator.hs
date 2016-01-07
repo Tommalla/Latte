@@ -3,6 +3,7 @@
 module Translator where
 
 import Control.Monad.State
+import Data.List
 import qualified Data.Map as Map
 
 import AbsLatte
@@ -11,18 +12,19 @@ import LexLatte
 import ParLatte
 import PrintLatte
 
-data Code = NoIndent String | Indent String | CodeBlock [Code] | Noop
+data Code = NoIndent String | Indent String | CodeBlock [Code] | Noop | EmptyLine
 data MetaOp = Mul MulOp | Add AddOp | Rel RelOp
-type Env = Map.Map Ident Int
-type Translation a = State (Env, Int, Int) a  -- Env, -Local stack size, Max label number
-
+type Env = Map.Map Ident (Type, Int)
+type SEnv = Map.Map String String  -- Maps string to its label
+type Translation a = State (Env, SEnv, Int, Int) a  -- Env, -Local stack size, Max label number
 
 instance Show Code where
     show (NoIndent str) = str
     show (Indent str) = "  " ++ str
     show (CodeBlock code) = let tmp = foldl (\res c -> res ++ (show c) ++ "\n") "" code
         in take (length tmp - 1) tmp
-    show (Noop) = "  nop"
+    show Noop = "  nop"
+    show EmptyLine = ""
 
 entryProtocol :: Code
 entryProtocol = CodeBlock [(Indent "pushl %ebp"), (Indent "movl %esp, %ebp")]
@@ -34,12 +36,14 @@ unpackIdent :: Ident -> String
 unpackIdent (Ident str) = str
 
 translate :: Program -> String
-translate program = ".globl main\n\n" ++ (show $ fst (runState (translateProgram program) (Map.empty, 0, 0))) ++ "\n"
+translate program = (".globl main\n\n" ++
+        (show $ fst (runState (translateProgram program) (Map.empty, Map.empty, 0, 0))) ++ "\n")
 
 translateProgram :: Program -> Translation Code
 translateProgram (Program topDefs) = do
     res <- mapM (translateTopDef) topDefs
-    return (CodeBlock res)
+    strings <- stringsData (Program topDefs)
+    return $ CodeBlock [strings, EmptyLine, CodeBlock res]
 
 translateTopDef :: TopDef -> Translation Code
 translateTopDef (FnDef t ident args block) = do
@@ -73,9 +77,8 @@ translateStmt (BStmt (Block stmts)) = do
     res <- mapM (translateStmt) stmts
     return $ CodeBlock res
 translateStmt (Decl t items) = do
-    (_, size, _) <- get
-    let tSize = getSize t
-    allocItems size tSize items
+    (_, _, size, _) <- get
+    allocItems size t items
     initItems items
 translateStmt (Ass ident expr) = do
     exprCode <- translateExpr expr
@@ -195,10 +198,15 @@ getVarCode ident = do
     offset <- getVarIdx ident
     return $ (show offset) ++ "(%ebp)"
 
+getVarType :: Ident -> Translation Type
+getVarType ident = do
+    (env, _, _, _) <- get
+    return $ fst $ env Map.! ident
+
 getVarIdx :: Ident -> Translation Int
 getVarIdx ident = do
-    (env, _, _) <- get
-    return $ env Map.! ident
+    (env, _, _, _) <- get
+    return $ snd $ env Map.! ident
 
 -- Binds the args in the environment and returns the total size allocated (in Bytes)
 bindArgs :: [Arg] -> Translation Int
@@ -207,8 +215,8 @@ bindArgs args = bindArgsHelper 4 args
     bindArgsHelper :: Int -> [Arg] -> Translation Int
     bindArgsHelper lastSize ((Arg t ident):rest) = do
         let allocSize = getSize t
-        (env, minSize, nextLabel) <- get
-        put (Map.insert ident (lastSize + allocSize) env, minSize, nextLabel)
+        (env, senv, minSize, nextLabel) <- get
+        put (Map.insert ident (t, (lastSize + allocSize)) env, senv, minSize, nextLabel)
         bindArgsHelper (lastSize + allocSize) rest
     bindArgsHelper res [] = return res
 
@@ -216,6 +224,7 @@ bindArgs args = bindArgsHelper 4 args
 getSize :: Type -> Int
 getSize Int = 4
 getSize Bool = 4    -- Yes, let's use ints for now for consistency [FIXME]
+getSize Str = 8     -- Ptr to actual string, size
 getSize _ = 0   -- TODO
 
 allocVars :: [Stmt] -> Translation Code
@@ -227,8 +236,7 @@ allocVars stmts = do
     allocVarsHelper lastSize (h:rest) = do
         case h of
             (Decl t items) -> do
-                let size = getSize t
-                newSize <- allocItems lastSize size items
+                newSize <- allocItems lastSize t items
                 allocVarsHelper newSize rest
             (BStmt (Block nextStmts)) -> do
                 newSize <- allocVarsHelper lastSize nextStmts
@@ -239,16 +247,17 @@ allocVars stmts = do
             _ -> allocVarsHelper lastSize rest
     allocVarsHelper res [] = return res
 
-allocItems :: Int -> Int -> [Item] -> Translation Int
-allocItems lastSize size (h:t) = do
-    nextS <- allocItem lastSize size h
-    allocItems nextS size t
+allocItems :: Int -> Type -> [Item] -> Translation Int
+allocItems lastSize t (h:rest) = do
+    nextS <- allocItem lastSize t h
+    allocItems nextS t rest
 allocItems res _ [] = return res
 
-allocItem :: Int -> Int -> Item -> Translation Int
-allocItem lastSize size item = do
-    (env, minSize, nextLabel) <- get
-    put (Map.insert (getIdent item) (lastSize - size) env, min minSize (lastSize - size), nextLabel)
+allocItem :: Int -> Type -> Item -> Translation Int
+allocItem lastSize t item = do
+    let size = getSize t
+    (env, senv, minSize, nextLabel) <- get
+    put (Map.insert (getIdent item) (t, (lastSize - size)) env, senv, min minSize (lastSize - size), nextLabel)
     return $ lastSize - size
 
 initItems :: [Item] -> Translation Code
@@ -258,8 +267,12 @@ initItems items = do
 
 initItem :: Item -> Translation Code
 initItem (NoInit ident) = do
-    varCode <- getVarCode ident
-    return $ Indent $ "movl $0, " ++ varCode
+    t <- getVarType ident
+    case t of
+        Str -> return Noop -- TODO
+        _ -> do -- For now we assume numeric, will change with arrays
+            varCode <- getVarCode ident
+            return $ Indent $ "movl $0, " ++ varCode
 initItem (Init ident expr) = translateStmt (Ass ident expr)
 
 getIdent :: Item -> Ident
@@ -268,8 +281,8 @@ getIdent (Init res _) = res
 
 getNextLabel :: Translation Int
 getNextLabel = do
-    (env, minSize, nextLabel) <- get
-    put (env, minSize, nextLabel + 1)
+    (env, senv, minSize, nextLabel) <- get
+    put (env, senv, minSize, nextLabel + 1)
     return nextLabel
 
 getLabel :: Int -> String
@@ -277,3 +290,63 @@ getLabel idx = ".L" ++ (show idx)
 
 getLabelCode :: Int -> Code
 getLabelCode idx = NoIndent $ (getLabel idx) ++ ":"
+
+stringsData :: Program -> Translation Code
+stringsData program = do
+    let strings = extractStrings program
+    foldM_ (\idx str -> do
+            registerString str idx
+            return $ idx + 1) 0 strings
+    res <- mapM (storeString) strings
+    return $ CodeBlock res
+
+storeString :: String -> Translation Code
+storeString str = do
+    sLabel <- getStringLabel str
+    return $ CodeBlock [NoIndent $ sLabel ++ ":", NoIndent $ ".string " ++ (show str)]
+
+getStringLabel :: String -> Translation String
+getStringLabel str = do
+    (_, senv, _, _) <- get
+    return $ senv Map.! str
+
+registerString :: String -> Int -> Translation ()
+registerString str idx = do
+    (env, senv, minSize, nextLabel) <- get
+    let sLabel = ".S" ++ (show idx)
+    put (env, Map.insert str sLabel senv, minSize, nextLabel)
+
+-- Extracting a list of all strings from the program
+extractStrings :: Program -> [String]
+extractStrings (Program topDefs) = nub $ extractStringsTopDefs topDefs
+
+extractStringsTopDefs :: [TopDef] -> [String]
+extractStringsTopDefs = concat . map (extractStringsTopDef)
+
+extractStringsTopDef :: TopDef -> [String]
+extractStringsTopDef (FnDef _ _ _ (Block stmts)) = extractStringsStmts stmts
+
+extractStringsStmts :: [Stmt] -> [String]
+extractStringsStmts = concat . map (extractStringsStmt)
+
+extractStringsStmt :: Stmt -> [String]
+extractStringsStmt (BStmt (Block stmts)) = extractStringsStmts stmts
+extractStringsStmt (Decl Str items) = concat $ map (extractStringsItem) items
+extractStringsStmt (Ass _ expr) = extractStringsExpr expr
+extractStringsStmt (Ret expr) = extractStringsExpr expr
+extractStringsStmt (Cond expr stmt) = (extractStringsExpr expr) ++ (extractStringsStmt stmt)
+extractStringsStmt (CondElse expr stmt1 stmt2) = (extractStringsExpr expr) ++ (extractStringsStmt stmt1) ++
+        (extractStringsStmt stmt2)
+extractStringsStmt (While expr stmt) = extractStringsStmt (Cond expr stmt)
+extractStringsStmt (SExp expr) = extractStringsExpr expr
+extractStringsStmt _ = []
+
+extractStringsItem :: Item -> [String]
+extractStringsItem (Init _ expr) = extractStringsExpr expr
+extractStringsItem _ = []
+
+extractStringsExpr :: Expr -> [String]
+extractStringsExpr (EString str) = [str]
+extractStringsExpr (EApp _ exprs) = concat $ map (extractStringsExpr) exprs
+extractStringsExpr (EAdd expr1 Plus expr2) = (extractStringsExpr expr1) ++ (extractStringsExpr expr2)
+extractStringsExpr _ = []
