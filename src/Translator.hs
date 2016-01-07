@@ -76,7 +76,7 @@ translateStmt (Decl t items) = do
     (_, size, _) <- get
     let tSize = getSize t
     allocItems size tSize items
-    return Noop
+    initItems items
 translateStmt (Ass ident expr) = do
     exprCode <- translateExpr expr
     varCode <- getVarCode ident
@@ -250,6 +250,17 @@ allocItem lastSize size item = do
     (env, minSize, nextLabel) <- get
     put (Map.insert (getIdent item) (lastSize - size) env, min minSize (lastSize - size), nextLabel)
     return $ lastSize - size
+
+initItems :: [Item] -> Translation Code
+initItems items = do
+    initCode <- mapM (initItem) items
+    return $ CodeBlock initCode
+
+initItem :: Item -> Translation Code
+initItem (NoInit ident) = do
+    varCode <- getVarCode ident
+    return $ Indent $ "movl $0, " ++ varCode
+initItem (Init ident expr) = translateStmt (Ass ident expr)
 
 getIdent :: Item -> Ident
 getIdent (NoInit res) = res
