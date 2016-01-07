@@ -8,4 +8,12 @@ void main() {
     boolean d;
     d = false && a;
     d = d || true;
+
+    if (d) {
+        printInt(2);
+    }
+
+    if (2 < 1) {
+        printInt(2);
+    }
 }

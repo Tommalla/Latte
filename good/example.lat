@@ -1,4 +1,7 @@
 int foo(int a) {
+    a++;
+    printInt(a);
+    a--;
     return 2 * a + 1;
 }
 

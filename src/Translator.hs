@@ -48,7 +48,15 @@ translateTopDef (FnDef t ident args block) = do
     bindArgs args
     blockCode <- translateBlock block
     put mem
-    return $ CodeBlock [header, entryProtocol, blockCode, leaveProtocol]
+    let (Block stmts) = block
+    let doRet = case last stmts of
+            VRet -> False
+            (Ret _) -> False
+            _ -> True
+    let codeList = if doRet
+            then [header, entryProtocol, blockCode, leaveProtocol]
+            else [header, entryProtocol, blockCode]
+    return $ CodeBlock codeList
 
 translateBlock :: Block -> Translation Code
 translateBlock (Block stmts) = do
@@ -73,6 +81,32 @@ translateStmt (Ass ident expr) = do
     exprCode <- translateExpr expr
     varCode <- getVarCode ident
     return $ CodeBlock [exprCode, Indent $ "popl " ++ varCode]
+translateStmt (Incr ident) = do
+    varCode <- getVarCode ident
+    return $ Indent $ "incl " ++ varCode
+translateStmt (Decr ident) = do
+    varCode <- getVarCode ident
+    return $ Indent $ "decl " ++ varCode
+translateStmt (Ret expr) = do
+    exprCode <- translateExpr expr
+    return $ CodeBlock [exprCode, Indent "popl %eax", leaveProtocol]
+translateStmt VRet = return leaveProtocol
+translateStmt (Cond expr stmt) = do
+    exprCode <- translateExpr expr
+    lExit <- getNextLabel
+    stmtCode <- translateStmt stmt
+    let jmp = CodeBlock [Indent "popl %eax", Indent "testl %eax, %eax", Indent $ "jz " ++ (getLabel lExit)]
+    return $ CodeBlock [exprCode, jmp, stmtCode, NoIndent $ (getLabel lExit) ++ ":"]
+translateStmt (CondElse expr stmt1 stmt2) = do
+    exprCode <- translateExpr expr
+    lTrue <- getNextLabel
+    lExit <- getNextLabel
+    stmt1Code <- translateStmt stmt1
+    stmt2Code <- translateStmt stmt2
+    let jmp = CodeBlock [Indent "popl %eax", Indent "testl %eax, %eax", Indent $ "jnz " ++ (getLabel lTrue)]
+    return $ CodeBlock [exprCode, jmp, stmt2Code, Indent $ "jmp " ++ (getLabel lExit),
+                        NoIndent $ (getLabel lTrue) ++ ":", stmt1Code, NoIndent $ (getLabel lExit) ++ ":"]
+-- TODO if; if else; while
 translateStmt (SExp expr) = translateExpr expr
 translateStmt _ = return Noop
 
@@ -84,8 +118,8 @@ translateExpr (EVar ident) = do
     varCode <- getVarCode ident
     return $ Indent $ "pushl " ++ varCode
 translateExpr (ELitInt num) = return $ Indent $ "pushl $" ++ (show num)
-translateExpr ELitTrue = return $ Indent "push $1"
-translateExpr ELitFalse = return $ Indent "push $0" 
+translateExpr ELitTrue = return $ Indent "pushl $1"
+translateExpr ELitFalse = return $ Indent "pushl $0"
 translateExpr (EApp ident args) = do
     exprs <- mapM (translateExpr) args
     return $ CodeBlock [CodeBlock exprs, Indent $ "call " ++ (unpackIdent ident), Indent "pushl %eax"]
@@ -95,7 +129,7 @@ translateExpr (Neg expr) = do
     return $ CodeBlock [exprCode, Indent "popl %eax", Indent "neg %eax", Indent "pushl %eax"]
 translateExpr (Not expr) = do
     exprCode <- translateExpr expr
-    return $ CodeBlock [exprCode, Indent "pop %eax", Indent "not %eax", Indent "push %eax"]
+    return $ CodeBlock [exprCode, Indent "popl %eax", Indent "not %eax", Indent "pushl %eax"]
 translateExpr (EMul expr1 mop expr2) = translateBinaryOp expr1 expr2 (Mul mop)
 translateExpr (EAdd expr1 aop expr2) = translateBinaryOp expr1 expr2 (Add aop)
 translateExpr (ERel expr1 rop expr2) = translateBinaryOp expr1 expr2 (Rel rop)
@@ -106,7 +140,7 @@ translateExpr (EAnd expr1 expr2) = do
     lExit <- getNextLabel
     let checkRes = CodeBlock [Indent "popl %eax", Indent "testl %eax, %eax", Indent $ "jz " ++ (getLabel lFalse)]
     let labelFalse = CodeBlock [NoIndent $ (getLabel lFalse) ++ ":", Indent $ "pushl $0"]
-    return $ CodeBlock [expr1Code, checkRes, expr2Code, checkRes, Indent "pushl $1", 
+    return $ CodeBlock [expr1Code, checkRes, expr2Code, checkRes, Indent "pushl $1",
                         Indent $ "jmp "++ (getLabel lExit), labelFalse, NoIndent $ (getLabel lExit) ++ ":"]
 translateExpr (EOr expr1 expr2) = do
     expr1Code <- translateExpr expr1
@@ -115,7 +149,7 @@ translateExpr (EOr expr1 expr2) = do
     lExit <- getNextLabel
     let checkRes = CodeBlock [Indent "popl %eax", Indent "testl %eax, %eax", Indent $ "jnz " ++ (getLabel lTrue)]
     let labelTrue = CodeBlock [NoIndent $ (getLabel lTrue) ++ ":", Indent "pushl $1"]
-    return $ CodeBlock [expr1Code, checkRes, expr2Code, checkRes, Indent "pushl $0", 
+    return $ CodeBlock [expr1Code, checkRes, expr2Code, checkRes, Indent "pushl $0",
                         Indent $ "jmp " ++ (getLabel lExit), labelTrue, NoIndent $ (getLabel lExit) ++ ":"]
 
 translateBinaryOp :: Expr -> Expr -> MetaOp -> Translation Code
@@ -127,7 +161,7 @@ translateBinaryOp expr1 expr2 metaOp = do
 
 translateMetaOp :: MetaOp -> Translation Code
 translateMetaOp (Mul mop) = do
-    let divOp = [Indent "popl %ebx", Indent "popl %eax", Indent "movl %eax, %edx", Indent "shr $31, %edx", 
+    let divOp = [Indent "popl %ebx", Indent "popl %eax", Indent "movl %eax, %edx", Indent "shr $31, %edx",
                  Indent "idiv %ebx"]
     return $ case mop of
             Times -> CodeBlock [Indent "popl %eax", Indent "imul 0(%esp), %eax", Indent "pushl %eax"]
@@ -160,7 +194,7 @@ getVarIdx ident = do
 
 -- Binds the args in the environment and returns the total size allocated (in Bytes)
 bindArgs :: [Arg] -> Translation Int
-bindArgs args = bindArgsHelper 0 args
+bindArgs args = bindArgsHelper 4 args
     where
     bindArgsHelper :: Int -> [Arg] -> Translation Int
     bindArgsHelper lastSize ((Arg t ident):rest) = do
@@ -191,6 +225,9 @@ allocVars stmts = do
             (BStmt (Block nextStmts)) -> do
                 newSize <- allocVarsHelper lastSize nextStmts
                 allocVarsHelper newSize rest
+            (Cond _ stmt) -> allocVarsHelper lastSize (stmt:rest)
+            (CondElse _ s1 s2) -> allocVarsHelper lastSize (s1:(s2:rest))
+            (While _ stmt) -> allocVarsHelper lastSize (stmt:rest)
             _ -> allocVarsHelper lastSize rest
     allocVarsHelper res [] = return res
 
