@@ -4,6 +4,7 @@ module Compiler where
 
 import Data.List
 import Data.List.Split
+import System.IO
 import System.Process
 
 import AbsLatte
@@ -28,7 +29,7 @@ compile code inputFile = do
                 let newPath = path ++ (if path == "" then "" else "/") ++ className
                 let asmPath = (newPath ++ ".s")
                 let compileCmd = "g++ -m32 lib/runtime.o " ++ asmPath ++ " -o " ++ newPath
-                putStrLn $ "OK"
+                hPutStrLn stderr "OK"
                 putStrLn $ "Writing to: " ++ asmPath
                 writeFile asmPath res
                 putStrLn $ "Running compiler:\n\t" ++ compileCmd

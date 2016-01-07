@@ -132,7 +132,7 @@ translateExpr ELitFalse = return $ Indent "pushl $0"
 translateExpr (EApp ident args) = do
     exprs <- mapM (translateExpr) args
     return $ CodeBlock [CodeBlock exprs, Indent $ "call " ++ (unpackIdent ident), Indent "pushl %eax"]
-translateExpr (EString str) = return Noop
+translateExpr (EString str) = return Noop -- TODO
 translateExpr (Neg expr) = do
     exprCode <- translateExpr expr
     return $ CodeBlock [exprCode, Indent "popl %eax", Indent "neg %eax", Indent "pushl %eax"]
