@@ -7,13 +7,15 @@ import Control.Monad.State
 import qualified Data.Map as Map
 
 import AbsLatte
+import Common
 import ErrM
 import LexLatte
 import ParLatte
 import PrintLatte
 
-data TypecheckError = ExactError String | IdentNotFound Ident | UnexpectedRetType Type Type | UnexpectedType Type Type | 
-        ArgMismatch Arg | WrongArgsNo Int Int | NotNumeric Type | NotBoolConvertible Type | NotAnArray Ident
+data TypecheckError = ExactError String | IdentNotFound Ident | UnexpectedRetType Type Type | UnexpectedType Type Type |
+        ArgMismatch Arg | WrongArgsNo Int Int | NotNumeric Type | NotBoolConvertible Type | NotAnArray Ident |
+        IllegalStringArithmetic Expr
     deriving (Eq, Show)
 type FunType = (Env, Type, [Arg], Block)
 type PEnv = Map.Map Ident FunType
@@ -29,15 +31,23 @@ typeCheck program = case fst (runState (runExceptT (checkProgram program)) (Map.
 
 checkProgram :: Program -> Eval ()
 checkProgram (Program topDefs) = do
-    let builtins = [(Void, "printInt", [Arg Int $ Ident ""]), 
+    let builtins = [(Void, "printInt", [Arg Int $ Ident ""]),
                     (Void, "printString", [Arg Str $ Ident ""]),
                     (Void, "error", []),
                     (Int, "readInt", []),
                     (Str, "readString", [])]
-    mapM_ (\(t, name, args) -> checkFnDef t (Ident name) args (Block [Empty])) builtins 
+    mapM_ (\(t, name, args) -> checkFnDef t (Ident name) args (Block [fabricateRet t])) builtins
     mapM_ (checkTopDef) topDefs
     checkFnApp (Ident "main") []  -- TODO toplevel args still unsupported
     return ()
+    where
+        fabricateRet :: Type -> Stmt
+        fabricateRet Void = VRet
+        fabricateRet t = Ret $ case t of
+                Int -> ELitInt 0
+                Str -> EString ""
+                Bool -> ELitFalse
+                Array at -> ENewArr at 0
 
 checkTopDef :: TopDef -> Eval ()
 checkTopDef (FnDef retType ident args block) = checkFnDef retType ident args block
@@ -160,14 +170,6 @@ declare t ident = do
     (env, penv) <- get
     put $ (Map.insert ident t env, penv)
 
-isNumeric :: Type -> Bool
-isNumeric Int = True
-isNumeric _ = False
-
-isBoolConvertible :: Type -> Bool
-isBoolConvertible Bool = True
-isBoolConvertible t = isNumeric t
-
 checkExpr :: Expr -> Eval Type
 checkExpr (ENewArr t _) = return (Array t)
 checkExpr (EArrElem ident _) = do
@@ -181,7 +183,7 @@ checkExpr (EVar ident) = do
 checkExpr (ELitInt _) = return Int
 checkExpr ELitTrue = return Bool
 checkExpr ELitFalse = return Bool
-checkExpr (EApp ident exprs) = do 
+checkExpr (EApp ident exprs) = do
    passedTypes <- mapM (checkExpr) exprs
    checkFnApp ident passedTypes
 checkExpr (EString _) = return Str
@@ -196,7 +198,21 @@ checkExpr (Not expr) = do
         return Bool
     else throwE (NotBoolConvertible t)
 checkExpr (EMul expr1 _ expr2) = checkArithmeticExpr expr1 expr2
-checkExpr (EAdd expr1 _ expr2) = checkArithmeticExpr expr1 expr2
+checkExpr (EAdd expr1 Plus expr2) = do
+    t1 <- checkExpr expr1
+    t2 <- checkExpr expr2
+    if (isString t1) && (t1 == t2) then
+        return Str
+    else
+        checkArithmeticExpr expr1 expr2
+checkExpr (EAdd expr1 Minus expr2) = do
+    -- Minus forbidden for strings.
+    t1 <- checkExpr expr1
+    t2 <- checkExpr expr2
+    if (isString t1) || (isString t2) then
+        throwE $ IllegalStringArithmetic $ EAdd expr1 Minus expr2
+    else
+        checkArithmeticExpr expr1 expr2
 checkExpr (ERel expr1 _ expr2) = checkArithmeticExpr expr1 expr2
 checkExpr (EAnd expr1 expr2) = checkBoolExpr expr1 expr2
 checkExpr (EOr expr1 expr2) = checkBoolExpr expr1 expr2

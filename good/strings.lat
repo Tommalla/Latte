@@ -1,0 +1,16 @@
+int main() {
+    string a = "Hello";
+    string b;
+    string escaped = "Blah blah '\"lolwut\"";
+    b = "World!\n";
+    printString(a + " " + b);
+    a = a + b;
+    printString(a);
+    printString(b);
+    printString(a + " ");
+    printString(escaped);
+
+    a = readString();
+    printString(a);
+    return 1;
+}

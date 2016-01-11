@@ -29,3 +29,14 @@ char* readString() {
     getline(&res, &len, stdin);
     return res;
 }
+
+char* __concatStrings(char* a, char* b) {
+    size_t lenA, lenB;
+    lenA = strlen(a);
+    lenB = strlen(b);
+    char* res = malloc(lenA + lenB + 1);
+    memcpy(res, a, lenA);
+    memcpy(res + lenA, b, lenB);
+    res[lenA + lenB] = '\0';
+    return res;
+}
