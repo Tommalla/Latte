@@ -41,8 +41,8 @@ translate program = (".globl main\n\n" ++
 
 translateProgram :: Program -> Translation Code
 translateProgram (Program topDefs) = do
-    res <- mapM (translateTopDef) topDefs
     strings <- stringsData (Program topDefs)
+    res <- mapM (translateTopDef) topDefs
     return $ CodeBlock [strings, EmptyLine, CodeBlock res]
 
 translateTopDef :: TopDef -> Translation Code
@@ -132,7 +132,9 @@ translateExpr ELitFalse = return $ Indent "pushl $0"
 translateExpr (EApp ident args) = do
     exprs <- mapM (translateExpr) args
     return $ CodeBlock [CodeBlock exprs, Indent $ "call " ++ (unpackIdent ident), Indent "pushl %eax"]
-translateExpr (EString str) = return Noop -- TODO
+translateExpr (EString str) = do
+    lStr <- getStringLabel str
+    return $ Indent $ "pushl $" ++ lStr
 translateExpr (Neg expr) = do
     exprCode <- translateExpr expr
     return $ CodeBlock [exprCode, Indent "popl %eax", Indent "neg %eax", Indent "pushl %eax"]
@@ -224,7 +226,7 @@ bindArgs args = bindArgsHelper 4 args
 getSize :: Type -> Int
 getSize Int = 4
 getSize Bool = 4    -- Yes, let's use ints for now for consistency [FIXME]
-getSize Str = 8     -- Ptr to actual string, size
+getSize Str = 4     -- Ptr to actual string
 getSize _ = 0   -- TODO
 
 allocVars :: [Stmt] -> Translation Code
