@@ -5,6 +5,8 @@ module TypeChecker where
 import Control.Monad.Trans.Except
 import Control.Monad.State
 import qualified Data.Map as Map
+import Data.Maybe
+import Debug.Trace (trace)
 
 import AbsLatte
 import Common
@@ -15,7 +17,7 @@ import PrintLatte
 
 data TypecheckError = ExactError String | IdentNotFound Ident | UnexpectedRetType Type Type | UnexpectedType Type Type |
         ArgMismatch Arg | WrongArgsNo Int Int | NotNumeric Type | NotBoolConvertible Type | NotAnArray Ident |
-        IllegalStringArithmetic Expr
+        IllegalStringArithmetic Expr | RetTypeMismatch Type Type
     deriving (Eq, Show)
 type FunType = (Env, Type, [Arg], Block)
 type PEnv = Map.Map Ident FunType
@@ -36,26 +38,59 @@ checkProgram (Program topDefs) = do
                     (Void, "error", []),
                     (Int, "readInt", []),
                     (Str, "readString", [])]
-    mapM_ (\(t, name, args) -> checkFnDef t (Ident name) args (Block [fabricateRet t])) builtins
+    mapM_ (\(t, name, args) -> registerFnDef t (Ident name) args (Block [Empty])) builtins
+    mapM_ (\(FnDef retType ident args block) -> registerFnDef retType ident args block) topDefs
     mapM_ (checkTopDef) topDefs
     checkFnApp (Ident "main") []  -- TODO toplevel args still unsupported
     return ()
-    where
-        fabricateRet :: Type -> Stmt
-        fabricateRet Void = VRet
-        fabricateRet t = Ret $ case t of
-                Int -> ELitInt 0
-                Str -> EString ""
-                Bool -> ELitFalse
-                Array at -> ENewArr at 0
+    -- where
+    --     fabricateRet :: Type -> Stmt
+    --     fabricateRet Void = VRet
+    --     fabricateRet t = Ret $ case t of
+    --             Int -> ELitInt 0
+    --             Str -> EString ""
+    --             Bool -> ELitFalse
+    --             Array at -> ENewArr at 0
 
 checkTopDef :: TopDef -> Eval ()
-checkTopDef (FnDef retType ident args block) = checkFnDef retType ident args block
+checkTopDef (FnDef retType ident args block) = checkFnDef retType args block
 
-checkFnDef :: Type -> Ident -> [Arg] -> Block -> Eval ()
-checkFnDef retType ident args block = do
+-- Registers the function in env.
+registerFnDef :: Type -> Ident -> [Arg] -> Block -> Eval ()
+registerFnDef retType ident args block = do
     (env, penv) <- get
     put $ (env, Map.insert ident (env, retType, args, block) penv)
+
+-- Registers args of necessary type and checks block.
+checkFnDef :: Type -> [Arg] -> Block -> Eval ()
+checkFnDef retType args block = do
+    mem <- get
+    mapM_ (registerArg) args
+    actRetType <- checkTopLevelBlock block
+    put mem
+    if retType == actRetType then
+        return ()
+    else throwE $ UnexpectedRetType retType actRetType
+    where
+        registerArg :: Arg -> Eval ()
+        registerArg (Arg t ident) = declare t ident
+
+checkFnApp :: Ident -> [Type] -> Eval Type
+checkFnApp ident passedTypes = do
+    (env, retType, args, block) <- getFunction ident
+    (oldEnv, penv) <- get
+    put (env, penv)
+    res <- checkFnInv retType args passedTypes block
+    put (oldEnv, penv)
+    return res
+    where
+        checkFnInv :: Type -> [Arg] -> [Type] -> Block -> Eval Type
+        checkFnInv retType args passedTypes block = do
+            mem <- get
+            bindArgs args passedTypes
+            put mem
+            return retType
+
 
 getFunction :: Ident -> Eval FunType
 getFunction ident = do
@@ -71,25 +106,6 @@ getType ident = do
         (Just t) -> return t
         Nothing -> throwE (IdentNotFound ident)
 
-checkFnApp :: Ident -> [Type] -> Eval Type
-checkFnApp ident passedTypes = do
-    (env, retType, args, block) <- getFunction ident
-    (oldEnv, penv) <- get
-    put (env, penv)
-    res <- checkFnInv retType args passedTypes block
-    put (oldEnv, penv)
-    return res
-    where
-        checkFnInv :: Type -> [Arg] -> [Type] -> Block -> Eval Type
-        checkFnInv retType args passedTypes block = do
-            mem <- get
-            bindArgs args passedTypes
-            actRetType <- checkBlock block
-            put mem
-            if retType == actRetType then
-                return retType
-            else throwE (UnexpectedRetType retType actRetType)
-
 bindArgs :: [Arg] -> [Type] -> Eval ()
 bindArgs args passedTypes = do
     let (argsCnt, passedCnt) = (length args, length passedTypes)
@@ -103,17 +119,24 @@ bindArg (Arg t ident) passedType = do
         declare t ident
     else throwE (ArgMismatch (Arg t ident))
 
-checkBlock :: Block -> Eval Type
+checkTopLevelBlock :: Block -> Eval Type
+checkTopLevelBlock block = do
+    res <- checkBlock block
+    case res of
+        (Just t) -> return t
+        Nothing -> return Void
+
+checkBlock :: Block -> Eval (Maybe Type)
 checkBlock (Block stmts) = do
     checkBlockHelper stmts stmts
     where
-        checkBlockHelper :: [Stmt] -> [Stmt] -> Eval Type
+        checkBlockHelper :: [Stmt] -> [Stmt] -> Eval (Maybe Type)
         checkBlockHelper (stmt : t) stmts = do
             retType <- checkStmt stmt
             case retType of
-                (Just result) -> return result
+                (Just result) -> return (Just result)
                 Nothing -> checkBlockHelper t stmts
-        checkBlockHelper [] _ = return Void
+        checkBlockHelper [] _ = return Nothing
 
 checkStmt :: Stmt -> Eval (Maybe Type)
 checkStmt Empty = return Nothing
@@ -121,7 +144,7 @@ checkStmt (BStmt block) = do
     mem <- get
     res <- checkBlock block
     put mem
-    return (Just res)
+    return res
 checkStmt (Decl t items) = do
     mapM_ (declareItem t) items
     return Nothing
@@ -146,11 +169,20 @@ checkStmt (CondElse expr stmtTrue stmtFalse) = do
     condT <- checkExpr expr
     if isBoolConvertible condT then do
         mem <- get
-        checkStmt stmtTrue
+        resTrue <- checkStmt stmtTrue
         put mem
-        checkStmt stmtFalse
+        resFalse <- checkStmt stmtFalse
         put mem
-        return Nothing
+        if not $ isNothing resTrue then do
+            if not $ isNothing resFalse then do
+                if resTrue /= resFalse then
+                    throwE $ RetTypeMismatch (fromJust resTrue) (fromJust resFalse)
+                else return resTrue
+            else return resTrue
+        else
+            if not $ isNothing resFalse then
+                return resFalse
+            else return Nothing
     else throwE (NotBoolConvertible condT)
 checkStmt (While expr stmt) = checkStmt (Cond expr stmt)
 checkStmt (SExp expr) = do

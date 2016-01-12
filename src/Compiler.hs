@@ -17,7 +17,9 @@ import Translator (translate)
 
 compile :: String -> String -> IO (Maybe String)
 compile code inputFile = do
+    putStrLn "Parsing code..."
     let tokens = myLexer code
+    putStrLn "Running type check..."
     case pProgram tokens of
         Bad errorStr -> return $ Just ("Error at parsing: " ++ errorStr ++ "\nTokens: " ++ (show tokens))
         Ok program -> case typeCheck program of

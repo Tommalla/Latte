@@ -53,10 +53,11 @@ fillPEnv (Program topDefs) = mapM_ (registerFunc) topDefs
 translateTopDef :: TopDef -> Translation Code
 translateTopDef (FnDef t ident args block) = do
     let header = NoIndent $ (unpackIdent ident) ++ ":"
-    mem <- get
+    (env, senv, penv, minSize, _) <- get
     bindArgs args
     blockCode <- translateBlock block
-    put mem
+    (_, _, _, _, nextLabel) <- get
+    put (env, senv, penv, minSize, nextLabel)
     let (Block stmts) = block
     let doRet = case last stmts of
             VRet -> False
