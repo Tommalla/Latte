@@ -19,7 +19,7 @@ void error() {
 
 int readInt() {
     int a;
-    scanf("%d", &a);
+    scanf("%d\n", &a);
     return a;
 }
 
@@ -27,6 +27,8 @@ char* readString() {
     char* res = (char*)malloc(10);
     size_t len;
     getline(&res, &len, stdin);
+    len = strlen(res);
+    res[len - 1] = '\0';
     return res;
 }
 

@@ -16,16 +16,26 @@ import ParLatte
 import PrintLatte
 
 data TypecheckError = ExactError String | IdentNotFound Ident | UnexpectedRetType Type Type | UnexpectedType Type Type |
-        ArgMismatch Arg | WrongArgsNo Int Int | NotNumeric Type | NotBoolConvertible Type | NotAnArray Ident |
-        IllegalStringArithmetic Expr | RetTypeMismatch Type Type
+        ArgMismatch Type Arg | WrongArgsNo Int Int | NotNumeric Type | NotBoolConvertible Type | NotAnArray Ident |
+        IllegalStringArithmetic Expr | RetTypeMismatch Type Type | Redeclaration Ident
     deriving (Eq, Show)
 type FunType = (Env, Type, [Arg], Block)
 type PEnv = Map.Map Ident FunType
-type Env = Map.Map Ident Type
-type Eval a = ExceptT TypecheckError (State (Env, PEnv)) a
+type Env = Map.Map Ident (Type, Int) -- Type, level of declaration
+type Eval a = ExceptT TypecheckError (State (Env, PEnv, Int)) a -- Env, PEnv, current block level
+
+incLevel :: Eval ()
+incLevel = do
+    (env, penv, level) <- get
+    put (env, penv, level + 1)
+
+getLevel :: Eval Int
+getLevel = do
+    (_, _, level) <- get
+    return level
 
 typeCheck :: Program -> Maybe String
-typeCheck program = case fst (runState (runExceptT (checkProgram program)) (Map.empty, Map.empty)) of
+typeCheck program = case fst (runState (runExceptT (checkProgram program)) (Map.empty, Map.empty, 0)) of
     (Right _) -> Nothing
     (Left exc) -> case exc of
         (ExactError msg) -> Just msg
@@ -45,8 +55,8 @@ checkTopDef (FnDef retType ident args block) = checkFnDef retType args block
 -- Registers the function in env.
 registerFnDef :: Type -> Ident -> [Arg] -> Block -> Eval ()
 registerFnDef retType ident args block = do
-    (env, penv) <- get
-    put $ (env, Map.insert ident (env, retType, args, block) penv)
+    (env, penv, level) <- get
+    put $ (env, Map.insert ident (env, retType, args, block) penv, level)
 
 -- Registers args of necessary type and checks block.
 checkFnDef :: Type -> [Arg] -> Block -> Eval ()
@@ -65,32 +75,24 @@ checkFnDef retType args block = do
 checkFnApp :: Ident -> [Type] -> Eval Type
 checkFnApp ident passedTypes = do
     (env, retType, args, block) <- getFunction ident
-    (oldEnv, penv) <- get
-    put (env, penv)
-    res <- checkFnInv retType args passedTypes block
-    put (oldEnv, penv)
-    return res
-    where
-        checkFnInv :: Type -> [Arg] -> [Type] -> Block -> Eval Type
-        checkFnInv retType args passedTypes block = do
-            mem <- get
-            bindArgs args passedTypes
-            put mem
-            return retType
-
+    (oldEnv, penv, level) <- get
+    put (env, penv, level)
+    bindArgs args passedTypes
+    put (oldEnv, penv, level)
+    return retType
 
 getFunction :: Ident -> Eval FunType
 getFunction ident = do
-    (_, penv) <- get
+    (_, penv, _) <- get
     case Map.lookup ident penv of
         (Just fn) -> return fn
         Nothing -> throwE (IdentNotFound ident)
 
 getType :: Ident -> Eval Type
 getType ident = do
-    (env, _) <- get
+    (env, _, _) <- get
     case Map.lookup ident env of
-        (Just t) -> return t
+        (Just (t, _)) -> return t
         Nothing -> throwE (IdentNotFound ident)
 
 bindArgs :: [Arg] -> [Type] -> Eval ()
@@ -104,7 +106,7 @@ bindArg :: Arg -> Type -> Eval ()
 bindArg (Arg t ident) passedType = do
     if passedType == t then
         declare t ident
-    else throwE (ArgMismatch (Arg t ident))
+    else throwE (ArgMismatch passedType (Arg t ident))
 
 checkTopLevelBlock :: Block -> Eval Type
 checkTopLevelBlock block = do
@@ -129,6 +131,7 @@ checkStmt :: Stmt -> Eval (Maybe Type)
 checkStmt Empty = return Nothing
 checkStmt (BStmt block) = do
     mem <- get
+    incLevel
     res <- checkBlock block
     put mem
     return res
@@ -153,24 +156,27 @@ checkStmt (Ret expr) = do
 checkStmt VRet = return (Just Void)
 checkStmt (Cond expr stmt) = checkStmt (CondElse expr stmt Empty)
 checkStmt (CondElse expr stmtTrue stmtFalse) = do
-    condT <- checkExpr expr
-    if isBoolConvertible condT then do
+    case expr of
+        ELitTrue -> oneClauseCondStmt stmtTrue
+        ELitFalse -> oneClauseCondStmt stmtFalse
+        _ -> do
+            condT <- checkExpr expr
+            if isBoolConvertible condT then do
+                resTrue <- oneClauseCondStmt stmtTrue
+                resFalse <- oneClauseCondStmt stmtFalse
+                if not (isNothing resTrue) && not (isNothing resFalse) then do
+                    if resTrue /= resFalse then
+                        throwE $ RetTypeMismatch (fromJust resTrue) (fromJust resFalse)
+                    else return resTrue
+                else return Nothing
+            else throwE (NotBoolConvertible condT)
+    where
+    oneClauseCondStmt :: Stmt -> Eval (Maybe Type)
+    oneClauseCondStmt stmt = do
         mem <- get
-        resTrue <- checkStmt stmtTrue
+        res <- checkStmt stmt
         put mem
-        resFalse <- checkStmt stmtFalse
-        put mem
-        if not $ isNothing resTrue then do
-            if not $ isNothing resFalse then do
-                if resTrue /= resFalse then
-                    throwE $ RetTypeMismatch (fromJust resTrue) (fromJust resFalse)
-                else return resTrue
-            else return resTrue
-        else
-            if not $ isNothing resFalse then
-                return resFalse
-            else return Nothing
-    else throwE (NotBoolConvertible condT)
+        return res
 checkStmt (While expr stmt) = checkStmt (Cond expr stmt)
 checkStmt (SExp expr) = do
     checkExpr expr
@@ -186,8 +192,15 @@ declareItem t (Init ident expr) = do
 
 declare :: Type -> Ident -> Eval ()
 declare t ident = do
-    (env, penv) <- get
-    put $ (Map.insert ident t env, penv)
+    (env, penv, level) <- get
+    let old = Map.lookup ident env
+    let oldLevel = case old of
+            (Just (_, oldLevel)) -> oldLevel
+            Nothing -> level - 1
+    if level == oldLevel then
+        throwE $ Redeclaration ident
+    else
+        put $ (Map.insert ident (t, level) env, penv, level)
 
 checkExpr :: Expr -> Eval Type
 checkExpr (ENewArr t _) = return (Array t)
@@ -222,17 +235,24 @@ checkExpr (EAdd expr1 Plus expr2) = do
     t2 <- checkExpr expr2
     if (isString t1) && (t1 == t2) then
         return Str
-    else
-        checkArithmeticExpr expr1 expr2
+    else checkArithmeticExpr expr1 expr2
 checkExpr (EAdd expr1 Minus expr2) = do
     -- Minus forbidden for strings.
     t1 <- checkExpr expr1
     t2 <- checkExpr expr2
     if (isString t1) || (isString t2) then
         throwE $ IllegalStringArithmetic $ EAdd expr1 Minus expr2
-    else
+    else checkArithmeticExpr expr1 expr2
+checkExpr (ERel expr1 rop expr2) = do
+    if rop == EQU || rop == NE then do
+        t1 <- checkExpr expr1
+        t2 <- checkExpr expr2
+        if t1 == t2 then
+            return Bool
+        else throwE $ UnexpectedType t1 t2
+    else do
         checkArithmeticExpr expr1 expr2
-checkExpr (ERel expr1 _ expr2) = checkArithmeticExpr expr1 expr2
+        return Bool
 checkExpr (EAnd expr1 expr2) = checkBoolExpr expr1 expr2
 checkExpr (EOr expr1 expr2) = checkBoolExpr expr1 expr2
 
