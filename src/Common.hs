@@ -8,6 +8,13 @@ import LexLatte
 import ParLatte
 import PrintLatte
 
+builtins :: [(Type, String, [Arg])]
+builtins = [(Void, "printInt", [Arg Int $ Ident ""]),
+            (Void, "printString", [Arg Str $ Ident ""]),
+            (Void, "error", []),
+            (Int, "readInt", []),
+            (Str, "readString", [])]
+
 isNumeric :: Type -> Bool
 isNumeric Int = True
 isNumeric _ = False

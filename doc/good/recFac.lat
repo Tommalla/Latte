@@ -1,0 +1,19 @@
+int main() {
+    printInt(rfac(10));
+    return 0;
+}
+
+int rfac(int n) {
+    printInt(n);
+    if (n == 0)
+      return 1;
+    else {
+      //int tmp =;
+      //printInt(tmp);
+      int tmp = n * rfac(n-1);
+      printString("==");
+      printInt(n);
+      printInt(tmp);
+      return tmp;
+    }
+}

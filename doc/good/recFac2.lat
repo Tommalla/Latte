@@ -1,0 +1,14 @@
+int main () {
+    printInt(ifac2f(1, 10));
+    return 0;
+}
+
+int ifac2f(int l, int h) {
+        if (l == h)
+          return l;
+        if (l > h)
+          return 1;
+        int m;
+        m = (l + h) / 2;
+        return ifac2f(l,m) * ifac2f(m+1,h);
+}

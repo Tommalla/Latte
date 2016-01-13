@@ -43,7 +43,9 @@ translateProgram (Program topDefs) = do
     return $ CodeBlock [strings, EmptyLine, CodeBlock res]
 
 fillPEnv :: Program -> Translation ()
-fillPEnv (Program topDefs) = mapM_ (registerFunc) topDefs
+fillPEnv (Program topDefs) = do
+    mapM_ (registerFunc) topDefs
+    mapM_ (registerFunc) (map (\(t, name, args) -> FnDef t (Ident name) args $ Block [Empty]) builtins)
     where
     registerFunc :: TopDef -> Translation ()
     registerFunc (FnDef retType ident _ _) = do
@@ -137,7 +139,11 @@ translateExpr ELitTrue = return $ pushl "$1"
 translateExpr ELitFalse = return $ pushl "$0"
 translateExpr (EApp ident args) = do
     exprs <- mapM (translateExpr) args
-    return $ CodeBlock [CodeBlock exprs, call ident, pushl eax]
+    retType <- getFnRetType ident
+    let remParams = map (\_ -> popl ebx) [1..(length args)]
+    if retType /= Void then
+        return $ CodeBlock [CodeBlock exprs, call ident, CodeBlock remParams, pushl eax]
+    else return $ CodeBlock [CodeBlock exprs, call ident, CodeBlock remParams]
 translateExpr (EString str) = do
     lStr <- getStringLabel str
     return $ pushl $ "$" ++ lStr
@@ -213,11 +219,11 @@ translateMetaOp (Mul mop) = do
     let divOp = [popl ebx, popl eax, Indent "movl %eax, %edx", Indent "shr $31, %edx",
                  Indent "idiv %ebx"]
     return $ case mop of
-            Times -> CodeBlock [popl eax, Indent "imul 0(%esp), %eax", pushl eax]
+            Times -> CodeBlock [popl eax, Indent "imul 0(%esp), %eax", movl eax "0(%esp)"]
             Div -> CodeBlock [CodeBlock divOp, pushl eax]
             Mod -> CodeBlock [CodeBlock divOp, pushl edx]
 translateMetaOp (Add aop) = return $ case aop of
-            Plus -> CodeBlock [popl eax, Indent "addl 0(%esp), %eax", pushl eax]
+            Plus -> CodeBlock [popl eax, Indent "addl 0(%esp), %eax", movl eax "0(%esp)"]
             Minus -> CodeBlock [popl eax, popl ebx, Indent "subl %eax, %ebx", pushl ebx]
 translateMetaOp (Rel rop) = do
     lFalse <- getNextLabel
@@ -254,14 +260,16 @@ getFnRetType ident = do
     return $ penv Map.! ident
 
 -- Binds the args in the environment and returns the total size allocated (in Bytes)
-bindArgs :: [Arg] -> Translation Int
-bindArgs args = bindArgsHelper 4 (reverse args)
+bindArgs :: [Arg] -> Translation ()
+bindArgs args = do
+    bindArgsHelper 4 (reverse args)
+    return ()
     where
     bindArgsHelper :: Int -> [Arg] -> Translation Int
     bindArgsHelper lastSize ((Arg t ident):rest) = do
         let allocSize = getSize t
         (env, senv, penv, minSize, nextLabel) <- get
-        put (Map.insert ident (t, (lastSize + allocSize)) env, senv, penv, minSize, nextLabel)
+        put (Map.insert ident (t, lastSize + allocSize) env, senv, penv, minSize, nextLabel)
         bindArgsHelper (lastSize + allocSize) rest
     bindArgsHelper res [] = return res
 
@@ -423,6 +431,9 @@ pushl src = Indent $ "pushl " ++ src
 
 popl :: String -> Code
 popl src = Indent $ "popl " ++ src
+
+movl :: String -> String -> Code
+movl src dst = Indent $ "movl " ++ src ++ ", " ++ dst
 
 swapArgs :: Code
 swapArgs = CodeBlock [popl eax, popl ebx, pushl eax, pushl ebx]
