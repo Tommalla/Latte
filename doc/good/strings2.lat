@@ -1,0 +1,25 @@
+int main() {
+    printString("=");
+    printString(makeString());
+    string r = rep("=", 60);
+    printString(r);
+    printString(rep("=", 60));
+    return 0;
+}
+
+string makeString() {
+    return "made";
+}
+
+string rep(string a, int times) {
+    printInt(times);
+    // printString(a);
+    // string res = "";
+    //printString(res);
+    //while (times) {
+        //res = res + a;
+    //    times--;
+    //}
+
+    return a;
+}

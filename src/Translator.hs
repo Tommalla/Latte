@@ -255,7 +255,7 @@ getFnRetType ident = do
 
 -- Binds the args in the environment and returns the total size allocated (in Bytes)
 bindArgs :: [Arg] -> Translation Int
-bindArgs args = bindArgsHelper 4 args
+bindArgs args = bindArgsHelper 4 (reverse args)
     where
     bindArgsHelper :: Int -> [Arg] -> Translation Int
     bindArgsHelper lastSize ((Arg t ident):rest) = do
