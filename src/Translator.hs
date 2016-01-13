@@ -225,7 +225,7 @@ translateStringAddition expr1 expr2 = do
 
 translateMetaOp :: MetaOp -> Translation Code
 translateMetaOp (Mul mop) = do
-    let divOp = [popl ebx, popl eax, Indent "movl %eax, %edx", Indent "shr $31, %edx",
+    let divOp = [popl ebx, popl eax, Indent "movl %eax, %edx", Indent "sar $31, %edx",
                  Indent "idiv %ebx"]
     return $ case mop of
             Times -> CodeBlock [popl eax, Indent "imul 0(%esp), %eax", movl eax "0(%esp)"]
