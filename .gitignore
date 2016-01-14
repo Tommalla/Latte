@@ -1,7 +1,7 @@
 *.s
 parser/TestLatte
 dist
-latc
+latc_x86
 cabal-dev
 *.o
 *.hi
