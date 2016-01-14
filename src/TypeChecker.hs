@@ -18,11 +18,31 @@ import PrintLatte
 data TypecheckError = ExactError String | IdentNotFound Ident | UnexpectedRetType Type Type | UnexpectedType Type Type |
         ArgMismatch Type Arg | WrongArgsNo Int Int | NotNumeric Type | NotBoolConvertible Type | NotAnArray Ident |
         IllegalStringArithmetic Expr | RetTypeMismatch Type Type | Redeclaration Ident
-    deriving (Eq, Show)
+    deriving (Eq)
 type FunType = (Env, Type, [Arg], Block)
 type PEnv = Map.Map Ident FunType
 type Env = Map.Map Ident (Type, Int) -- Type, level of declaration
 type Eval a = ExceptT TypecheckError (State (Env, PEnv, Int)) a -- Env, PEnv, current block level
+
+instance Show TypecheckError where
+    show (ExactError str) = str
+    show (IdentNotFound ident) = "The identifier '" ++ show ident ++ "' was not found."
+    show (UnexpectedRetType expected found) = "Unexpected return type: expected '" ++ show expected ++
+            "', found '" ++ show found ++ "'."
+    show (UnexpectedType expected found) = "Unexpected type: expected '" ++ show expected ++ "', found '" ++
+            show found ++ "'."
+    show (ArgMismatch found (Arg expT expIdent)) = "Wrong argument: for '" ++ show expIdent ++ "' expected type '" ++
+            show expT ++ "', found '" ++ show found ++ "'."
+    show (WrongArgsNo expected found) = "Wrong number of arguments passed: expected " ++ show expected ++ " found " ++
+            show found ++ "."
+    show (NotNumeric t) = "Expected a numeric type, found: '" ++ show t ++ "'."
+    show (NotBoolConvertible t) = "Expected a bool-convertible type, found: '" ++ show t ++ "'."
+    show (NotAnArray ident) = "'" ++ show ident ++ "' expected to be an array."
+    show (IllegalStringArithmetic expr) = "Tried to perform arithmetic on strings other than '+' in expression: '" ++
+            show expr ++ "'."
+    show (RetTypeMismatch expected found) = "Wrong return type. Expected '" ++ show expected ++ "', found '" ++
+            show found ++ "'."
+    show (Redeclaration ident) = "Tried to declare '" ++ show ident ++ "' for the second time in the same block."
 
 incLevel :: Eval ()
 incLevel = do
@@ -50,7 +70,8 @@ checkProgram (Program topDefs) = do
     return ()
 
 checkTopDef :: TopDef -> Eval ()
-checkTopDef (FnDef retType ident args block) = checkFnDef retType args block
+checkTopDef (FnDef retType ident args block) = catchE (checkFnDef retType args block) (\exc ->
+    throwE $ ExactError $ "In function '" ++ show ident ++ "': " ++ show exc)
 
 -- Registers the function in env.
 registerFnDef :: Type -> Ident -> [Arg] -> Block -> Eval ()
@@ -121,11 +142,16 @@ checkBlock (Block stmts) = do
     where
         checkBlockHelper :: [Stmt] -> [Stmt] -> Eval (Maybe Type)
         checkBlockHelper (stmt : t) stmts = do
-            retType <- checkStmt stmt
+            retType <- checkStmtTopLevel stmt
             case retType of
                 (Just result) -> return (Just result)
                 Nothing -> checkBlockHelper t stmts
         checkBlockHelper [] _ = return Nothing
+
+-- This method typechecks the statement and catches errors to raise them again with more information.
+checkStmtTopLevel :: Stmt -> Eval (Maybe Type)
+checkStmtTopLevel stmt = catchE (checkStmt stmt) (
+        \exc -> throwE (ExactError $ "In statement '" ++ show stmt ++ "': " ++ show exc))
 
 checkStmt :: Stmt -> Eval (Maybe Type)
 checkStmt Empty = return Nothing
@@ -174,7 +200,7 @@ checkStmt (CondElse expr stmtTrue stmtFalse) = do
     oneClauseCondStmt :: Stmt -> Eval (Maybe Type)
     oneClauseCondStmt stmt = do
         mem <- get
-        res <- checkStmt stmt
+        res <- checkStmtTopLevel stmt
         put mem
         return res
 checkStmt (While expr stmt) = checkStmt (Cond expr stmt)

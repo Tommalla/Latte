@@ -9,8 +9,8 @@ import ParLatte
 import PrintLatte
 
 builtins :: [(Type, String, [Arg])]
-builtins = [(Void, "printInt", [Arg Int $ Ident ""]),
-            (Void, "printString", [Arg Str $ Ident ""]),
+builtins = [(Void, "printInt", [Arg Int $ Ident "n"]),
+            (Void, "printString", [Arg Str $ Ident "str"]),
             (Void, "error", []),
             (Int, "readInt", []),
             (Str, "readString", [])]
