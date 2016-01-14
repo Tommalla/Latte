@@ -94,9 +94,18 @@ translateStmt (Decl t items) = do
     (_, res) <- allocItems size t items
     return res
 translateStmt (Ass ident expr) = do
-    exprCode <- translateExpr expr
+    t <- getExprType expr
     varCode <- getVarCode ident
-    return $ CodeBlock [exprCode, popl varCode]
+    if t == Bool then do
+        lTrue <- getNextLabel
+        lFalse <- getNextLabel
+        lExit <- getNextLabel
+        exprCode <- translateBoolExpr expr lTrue lFalse
+        return $ CodeBlock [exprCode, getLabelCode lTrue, movl "$1" varCode, jmp $ getLabel lExit,
+                            getLabelCode lFalse, movl "$0" varCode, getLabelCode lExit]
+    else do
+        exprCode <- translateExpr expr
+        return $ CodeBlock [exprCode, popl varCode]
 translateStmt (Incr ident) = do
     varCode <- getVarCode ident
     return $ Indent $ "incl " ++ varCode
@@ -108,29 +117,38 @@ translateStmt (Ret expr) = do
     return $ CodeBlock [exprCode, popl eax, leaveProtocol]
 translateStmt VRet = return leaveProtocol
 translateStmt (Cond expr stmt) = do
-    exprCode <- translateExpr expr
-    lExit <- getNextLabel
-    stmtCode <- translateStmt $ toBlock stmt
-    let jmp = CodeBlock [popl eax, Indent "testl %eax, %eax", Indent $ "jz " ++ (getLabel lExit)]
-    return $ CodeBlock [exprCode, jmp, stmtCode, getLabelCode lExit]
-translateStmt (CondElse expr stmt1 stmt2) = do
-    exprCode <- translateExpr expr
     lTrue <- getNextLabel
+    lFalse <- getNextLabel
+    exprCode <- translateBoolExpr expr lTrue lFalse
+    stmtCode <- translateStmt $ toBlock stmt
+    return $ CodeBlock [exprCode, getLabelCode lTrue, stmtCode, getLabelCode lFalse]
+translateStmt (CondElse expr stmt1 stmt2) = do
+    lTrue <- getNextLabel
+    lFalse <- getNextLabel
     lExit <- getNextLabel
+    exprCode <- translateBoolExpr expr lTrue lFalse
     stmt1Code <- translateStmt $ toBlock stmt1
     stmt2Code <- translateStmt $ toBlock stmt2
-    let jmp = CodeBlock [popl eax, Indent "testl %eax, %eax", Indent $ "jnz " ++ (getLabel lTrue)]
-    return $ CodeBlock [exprCode, jmp, stmt2Code, Indent $ "jmp " ++ (getLabel lExit),
-                        getLabelCode lTrue, stmt1Code, getLabelCode lExit]
+    return $ CodeBlock [exprCode, getLabelCode lTrue, stmt1Code, jmp $ getLabel lExit, getLabelCode lFalse, stmt2Code,
+                        getLabelCode lExit]
 translateStmt (While expr stmt) = do
-    exprCode <- translateExpr expr
     lBegin <- getNextLabel
+    lLoop <- getNextLabel
     lExit <- getNextLabel
+    exprCode <- translateBoolExpr expr lLoop lExit
     stmtCode <- translateStmt $ toBlock stmt
-    let jmp = CodeBlock [popl eax, Indent "testl %eax, %eax", Indent $ "jz " ++ (getLabel lExit)]
-    return $ CodeBlock [getLabelCode lBegin, exprCode, jmp, stmtCode, Indent $ "jmp " ++ (getLabel lBegin),
+    return $ CodeBlock [getLabelCode lBegin, exprCode, getLabelCode lLoop, stmtCode, jmp $ getLabel lBegin,
                         getLabelCode lExit]
 translateStmt (SExp expr) = translateExpr expr
+
+boolExprOnStack :: Expr -> Translation Code
+boolExprOnStack expr = do
+    lTrue <- getNextLabel
+    lFalse <- getNextLabel
+    lExit <- getNextLabel
+    exprCode <- translateBoolExpr expr lTrue lFalse
+    return $ CodeBlock [exprCode, getLabelCode lTrue, pushl "$1", jmp $ getLabel lExit, getLabelCode lFalse, pushl "$0",
+                        getLabelCode lExit]
 
 -- Invariant: Every expression ends with pushing the result on the stack
 translateExpr :: Expr -> Translation Code
@@ -155,34 +173,35 @@ translateExpr (EString str) = do
 translateExpr (Neg expr) = do
     exprCode <- translateExpr expr
     return $ CodeBlock [exprCode, popl eax, Indent "neg %eax", pushl eax]
-translateExpr (Not expr) = do
-    exprCode <- translateExpr expr
-    lFalse <- getNextLabel
-    lExit <- getNextLabel
-    let labelFalse = CodeBlock [NoIndent $ (getLabel lFalse) ++ ":", pushl "$1"]
-    return $ CodeBlock [exprCode, popl eax, Indent "testl %eax, %eax", Indent $ "jz " ++ (getLabel lFalse),
-                        pushl "$0", jmp $ getLabel lExit, labelFalse, NoIndent $(getLabel lExit) ++ ":"]
 translateExpr (EMul expr1 mop expr2) = translateBinaryOp expr1 expr2 (Mul mop)
 translateExpr (EAdd expr1 aop expr2) = translateBinaryOp expr1 expr2 (Add aop)
 translateExpr (ERel expr1 rop expr2) = translateBinaryOp expr1 expr2 (Rel rop)
-translateExpr (EAnd expr1 expr2) = do
-    expr1Code <- translateExpr expr1
-    expr2Code <- translateExpr expr2
-    lFalse <- getNextLabel
-    lExit <- getNextLabel
-    let checkRes = CodeBlock [popl eax, Indent "testl %eax, %eax", Indent $ "jz " ++ (getLabel lFalse)]
-    let labelFalse = CodeBlock [NoIndent $ (getLabel lFalse) ++ ":", pushl "$0"]
-    return $ CodeBlock [expr1Code, checkRes, expr2Code, checkRes, pushl "$1", jmp $ getLabel lExit,
-                        labelFalse, NoIndent $ (getLabel lExit) ++ ":"]
-translateExpr (EOr expr1 expr2) = do
-    expr1Code <- translateExpr expr1
-    expr2Code <- translateExpr expr2
-    lTrue <- getNextLabel
-    lExit <- getNextLabel
-    let checkRes = CodeBlock [popl eax, Indent "testl %eax, %eax", Indent $ "jnz " ++ (getLabel lTrue)]
-    let labelTrue = CodeBlock [NoIndent $ (getLabel lTrue) ++ ":", pushl "$1"]
-    return $ CodeBlock [expr1Code, checkRes, expr2Code, checkRes, pushl "$0", jmp $ getLabel lExit, labelTrue,
-                        NoIndent $ (getLabel lExit) ++ ":"]
+translateExpr expr = boolExprOnStack expr
+
+-- Translates a boolean expression
+translateBoolExpr :: Expr -> Int -> Int -> Translation Code
+translateBoolExpr (ERel expr1 rop expr2) lTrue lFalse = do
+    exprCode <- translateExpr (ERel expr1 rop expr2)
+    return $ CodeBlock [exprCode, popl eax, testl eax eax,
+                        Indent $ "jnz " ++ (getLabel lTrue), jmp $ getLabel lFalse]
+translateBoolExpr (EAnd expr1 expr2) lTrue lFalse = do
+    lMid <- getNextLabel
+    expr1Code <- translateBoolExpr expr1 lMid lFalse
+    expr2Code <- translateBoolExpr expr2 lTrue lFalse
+    return $ CodeBlock [expr1Code, getLabelCode lMid, expr2Code]
+translateBoolExpr (EOr expr1 expr2) lTrue lFalse = do
+    lMid <- getNextLabel
+    expr1Code <- translateBoolExpr expr1 lTrue lMid
+    expr2Code <- translateBoolExpr expr2 lTrue lFalse
+    return $ CodeBlock [expr1Code, getLabelCode lMid, expr2Code]
+translateBoolExpr (Not expr) lTrue lFalse = translateBoolExpr expr lFalse lTrue
+translateBoolExpr expr lTrue lFalse = do
+    exprType <- getExprType expr
+    case exprType of
+        Bool -> do
+            exprCode <- translateExpr expr
+            return $ CodeBlock [exprCode, popl eax, testl eax eax, Indent $ "jnz " ++ (getLabel lTrue), jmp $ getLabel lFalse]
+        _ -> translateBoolExpr (ERel expr GTH (ELitInt 0)) lTrue lFalse
 
 getExprType :: Expr -> Translation Type
 getExprType (ENewArr t _) = return (Array t)
@@ -432,6 +451,12 @@ ecx = "%ecx"
 edx :: String
 edx = "%edx"
 
+ebp :: String
+ebp = "%ebp"
+
+esp :: String
+esp = "%esp"
+
 -- Assembler:
 call :: Ident -> Code
 call (Ident str) = Indent $ "call " ++ str
@@ -445,6 +470,9 @@ popl src = Indent $ "popl " ++ src
 movl :: String -> String -> Code
 movl src dst = Indent $ "movl " ++ src ++ ", " ++ dst
 
+testl :: String -> String -> Code
+testl src dst = Indent $ "testl " ++ src ++ ", " ++ dst
+
 jmp :: String -> Code
 jmp label = Indent $ "jmp " ++ label
 
@@ -453,7 +481,7 @@ swapArgs = CodeBlock [popl eax, popl ebx, pushl eax, pushl ebx]
 
 -- Misc:
 entryProtocol :: Code
-entryProtocol = CodeBlock [(Indent "pushl %ebp"), (Indent "movl %esp, %ebp")]
+entryProtocol = CodeBlock [(Indent "pushl %ebp"), movl esp ebp]
 
 leaveProtocol :: Code
 leaveProtocol = CodeBlock [(Indent "leave"), (Indent "ret")]

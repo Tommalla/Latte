@@ -1,0 +1,13 @@
+int main() {
+    int i = 1;
+    if (i > 0 && i < 2) {
+        printInt(1);
+    }
+
+    if (i > 0 && 0 < -1) {
+        printInt(0);
+    } else {
+        printInt(2);
+    }
+    return 0;
+}
