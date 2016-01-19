@@ -4,13 +4,28 @@ entrypoints Program ;
 
 Program.   Program ::= [TopDef] ;
 
-FnDef.	   TopDef ::= Type Ident "(" [Arg] ")" Block ;
+FnDef.	   TopDef ::= FuncDef ;
+ClassDef.  TopDef ::= "class" Ident "{" [CDef] "}" ;
+ClassExtDef. TopDef ::= "class" Ident "extends" Ident "{" [CDef] "}" ;
 
 separator nonempty TopDef "" ;
 
 Arg. 	   Arg ::= Type Ident;
 
 separator  Arg "," ;
+
+FunDef.   FuncDef ::= Type Ident "(" [Arg] ")" Block ;
+
+-- class definitions ---------------------------------------
+
+ClassItem. ClassItem ::= Ident ;
+
+separator nonempty ClassItem ",";
+
+Method.    CDef ::= FuncDef ;
+Attr.      CDef ::= Type [ClassItem] ";";
+
+separator nonempty CDef "" ;
 
 -- statements ----------------------------------------------
 
@@ -24,7 +39,7 @@ BStmt.     Stmt ::= Block ;
 
 Decl.      Stmt ::= Type [Item] ";" ;
 
-NoInit.    Item ::= Ident ; 
+NoInit.    Item ::= Ident ;
 
 Init.      Item ::= Ident "=" Expr ;
 
@@ -62,21 +77,31 @@ internal   Fun. Type ::= Type "(" [Type] ")" ;
 
 internal   Array. Type ::= Type "[]";
 
+internal   Class. Type ::= Ident;
+
 separator  Type "," ;
 
 -- Expressions ---------------------------------------------
+
+ENewObj.   Expr6 ::= "new" Ident ;
 
 ENewArr.   Expr6 ::= "new" Type "[" Integer "]" ;
 
 EArrElem.  Expr6 ::= Ident "[" Integer "]" ;
 
+EAttr.     Expr6 ::= Ident"."Ident ;
+
 EVar.      Expr6 ::= Ident ;
+
+ENullRef.  Expr6 ::= "(" Type ")null" ;
 
 ELitInt.   Expr6 ::= Integer ;
 
 ELitTrue.  Expr6 ::= "true" ;
 
 ELitFalse. Expr6 ::= "false" ;
+
+EMethApp.  Expr6 ::= Ident"."Ident "(" [Expr] ")" ;
 
 EApp.      Expr6 ::= Ident "(" [Expr] ")" ;
 

@@ -11,10 +11,22 @@ newtype Ident = Ident String deriving (Eq, Ord, Show, Read)
 data Program = Program [TopDef]
   deriving (Eq, Ord, Show, Read)
 
-data TopDef = FnDef Type Ident [Arg] Block
+data TopDef
+    = FnDef FuncDef
+    | ClassDef Ident [CDef]
+    | ClassExtDef Ident Ident [CDef]
   deriving (Eq, Ord, Show, Read)
 
 data Arg = Arg Type Ident
+  deriving (Eq, Ord, Show, Read)
+
+data FuncDef = FunDef Type Ident [Arg] Block
+  deriving (Eq, Ord, Show, Read)
+
+data ClassItem = ClassItem Ident
+  deriving (Eq, Ord, Show, Read)
+
+data CDef = Method FuncDef | Attr Type [ClassItem]
   deriving (Eq, Ord, Show, Read)
 
 data Block = Block [Stmt]
@@ -38,16 +50,27 @@ data Stmt
 data Item = NoInit Ident | Init Ident Expr
   deriving (Eq, Ord, Show, Read)
 
-data Type = Int | Str | Bool | Void | Fun Type [Type] | Array Type
+data Type
+    = Int
+    | Str
+    | Bool
+    | Void
+    | Fun Type [Type]
+    | Array Type
+    | Class Ident
   deriving (Eq, Ord, Show, Read)
 
 data Expr
-    = ENewArr Type Integer
+    = ENewObj Ident
+    | ENewArr Type Integer
     | EArrElem Ident Integer
+    | EAttr Ident Ident
     | EVar Ident
+    | ENullRef Type
     | ELitInt Integer
     | ELitTrue
     | ELitFalse
+    | EMethApp Ident Ident [Expr]
     | EApp Ident [Expr]
     | EString String
     | Neg Expr

@@ -32,18 +32,19 @@ except ``"`` unless preceded by ``\``.
 The set of reserved words is the set of terminals appearing in the grammar. Those reserved words that consist of non-letter characters are called symbols, and they are treated in a different way from those that are similar to identifiers. The lexer follows rules familiar from languages like Haskell, C, and Java, including longest match and spacing conventions.
 
 The reserved words used in Latte are the following:
-  | ``boolean`` | ``else`` | ``false`` | ``if``
-  | ``int`` | ``new`` | ``return`` | ``string``
-  | ``true`` | ``void`` | ``while`` | 
+  | ``boolean`` | ``class`` | ``else`` | ``extends``
+  | ``false`` | ``if`` | ``int`` | ``new``
+  | ``return`` | ``string`` | ``true`` | ``void``
+  | ``while`` |  |  | 
 
 The symbols used in Latte are the following:
-  | ( | ) | , | {
-  | } | ; | = | ++
+  | { | } | , | (
+  | ) | ; | = | ++
   | -- | [] | [ | ]
-  | - | ! | && | ||
-  | + | * | / | %
-  | < | <= | > | >=
-  | == | != |  | 
+  | . | )null | - | !
+  | && | || | + | *
+  | / | % | < | <=
+  | > | >= | == | !=
 
 ===Comments===
 Single-line comments begin with #, //.Multiple-line comments are  enclosed with /* and */.
@@ -55,13 +56,23 @@ and **eps** (empty rule) belong to the BNF notation.
 All other symbols are terminals.
 
   | //Program// | -> | //[TopDef]// 
-  | //TopDef// | -> | //Type// //Ident// ``(`` //[Arg]// ``)`` //Block// 
+  | //TopDef// | -> | //FuncDef// 
+  |  |  **|**  | ``class`` //Ident// ``{`` //[CDef]// ``}`` 
+  |  |  **|**  | ``class`` //Ident// ``extends`` //Ident// ``{`` //[CDef]// ``}`` 
   | //[TopDef]// | -> | //TopDef// 
   |  |  **|**  | //TopDef// //[TopDef]// 
   | //Arg// | -> | //Type// //Ident// 
   | //[Arg]// | -> | **eps**
   |  |  **|**  | //Arg// 
   |  |  **|**  | //Arg// ``,`` //[Arg]// 
+  | //FuncDef// | -> | //Type// //Ident// ``(`` //[Arg]// ``)`` //Block// 
+  | //ClassItem// | -> | //Ident// 
+  | //[ClassItem]// | -> | //ClassItem// 
+  |  |  **|**  | //ClassItem// ``,`` //[ClassItem]// 
+  | //CDef// | -> | //FuncDef// 
+  |  |  **|**  | //Type// //[ClassItem]// ``;`` 
+  | //[CDef]// | -> | //CDef// 
+  |  |  **|**  | //CDef// //[CDef]// 
   | //Block// | -> | ``{`` //[Stmt]// ``}`` 
   | //[Stmt]// | -> | **eps**
   |  |  **|**  | //Stmt// //[Stmt]// 
@@ -88,12 +99,16 @@ All other symbols are terminals.
   | //[Type]// | -> | **eps**
   |  |  **|**  | //Type// 
   |  |  **|**  | //Type// ``,`` //[Type]// 
-  | //Expr6// | -> | ``new`` //Type// ``[`` //Integer// ``]`` 
+  | //Expr6// | -> | ``new`` //Ident// 
+  |  |  **|**  | ``new`` //Type// ``[`` //Integer// ``]`` 
   |  |  **|**  | //Ident// ``[`` //Integer// ``]`` 
+  |  |  **|**  | //Ident// ``.`` //Ident// 
   |  |  **|**  | //Ident// 
+  |  |  **|**  | ``(`` //Type// ``)null`` 
   |  |  **|**  | //Integer// 
   |  |  **|**  | ``true`` 
   |  |  **|**  | ``false`` 
+  |  |  **|**  | //Ident// ``.`` //Ident// ``(`` //[Expr]// ``)`` 
   |  |  **|**  | //Ident// ``(`` //[Expr]// ``)`` 
   |  |  **|**  | //String// 
   |  |  **|**  | ``(`` //Expr// ``)`` 
