@@ -124,14 +124,15 @@ instance Print Stmt where
     Empty -> prPrec i 0 (concatD [doc (showString ";")])
     BStmt block -> prPrec i 0 (concatD [prt 0 block])
     Decl type_ items -> prPrec i 0 (concatD [prt 0 type_, prt 0 items, doc (showString ";")])
-    Ass id expr -> prPrec i 0 (concatD [prt 0 id, doc (showString "="), prt 0 expr, doc (showString ";")])
-    Incr id -> prPrec i 0 (concatD [prt 0 id, doc (showString "++"), doc (showString ";")])
-    Decr id -> prPrec i 0 (concatD [prt 0 id, doc (showString "--"), doc (showString ";")])
+    Ass lval expr -> prPrec i 0 (concatD [prt 0 lval, doc (showString "="), prt 0 expr, doc (showString ";")])
+    Incr lval -> prPrec i 0 (concatD [prt 0 lval, doc (showString "++"), doc (showString ";")])
+    Decr lval -> prPrec i 0 (concatD [prt 0 lval, doc (showString "--"), doc (showString ";")])
     Ret expr -> prPrec i 0 (concatD [doc (showString "return"), prt 0 expr, doc (showString ";")])
     VRet -> prPrec i 0 (concatD [doc (showString "return"), doc (showString ";")])
     Cond expr stmt -> prPrec i 0 (concatD [doc (showString "if"), doc (showString "("), prt 0 expr, doc (showString ")"), prt 0 stmt])
     CondElse expr stmt1 stmt2 -> prPrec i 0 (concatD [doc (showString "if"), doc (showString "("), prt 0 expr, doc (showString ")"), prt 0 stmt1, doc (showString "else"), prt 0 stmt2])
     While expr stmt -> prPrec i 0 (concatD [doc (showString "while"), doc (showString "("), prt 0 expr, doc (showString ")"), prt 0 stmt])
+    For type_ id lval stmt -> prPrec i 0 (concatD [doc (showString "for"), doc (showString "("), prt 0 type_, prt 0 id, doc (showString ":"), prt 0 lval, doc (showString ")"), prt 0 stmt])
     SExp expr -> prPrec i 0 (concatD [prt 0 expr, doc (showString ";")])
   prtList _ [] = (concatD [])
   prtList _ (x:xs) = (concatD [prt 0 x, prt 0 xs])
@@ -155,17 +156,17 @@ instance Print Type where
   prtList _ (x:xs) = (concatD [prt 0 x, doc (showString ","), prt 0 xs])
 instance Print Expr where
   prt i e = case e of
-    ENewObj id -> prPrec i 6 (concatD [doc (showString "new"), prt 0 id])
-    ENewArr type_ n -> prPrec i 6 (concatD [doc (showString "new"), prt 0 type_, doc (showString "["), prt 0 n, doc (showString "]")])
-    EArrElem id n -> prPrec i 6 (concatD [prt 0 id, doc (showString "["), prt 0 n, doc (showString "]")])
-    EAttr id1 id2 -> prPrec i 6 (concatD [prt 0 id1, doc (showString "."), prt 0 id2])
-    EVar id -> prPrec i 6 (concatD [prt 0 id])
     ENullRef type_ -> prPrec i 6 (concatD [doc (showString "("), prt 0 type_, doc (showString ")null")])
+    EAttr clsattracc -> prPrec i 6 (concatD [prt 0 clsattracc])
+    EMethApp methodapp -> prPrec i 6 (concatD [prt 0 methodapp])
+    EArrElem arrelemacc -> prPrec i 6 (concatD [prt 0 arrelemacc])
+    EVar id -> prPrec i 6 (concatD [prt 0 id])
+    ENewArr type_ expr -> prPrec i 6 (concatD [doc (showString "new"), prt 0 type_, doc (showString "["), prt 0 expr, doc (showString "]")])
+    ENew id -> prPrec i 6 (concatD [doc (showString "new"), prt 0 id])
     ELitInt n -> prPrec i 6 (concatD [prt 0 n])
     ELitTrue -> prPrec i 6 (concatD [doc (showString "true")])
     ELitFalse -> prPrec i 6 (concatD [doc (showString "false")])
-    EMethApp id1 id2 exprs -> prPrec i 6 (concatD [prt 0 id1, doc (showString "."), prt 0 id2, doc (showString "("), prt 0 exprs, doc (showString ")")])
-    EApp id exprs -> prPrec i 6 (concatD [prt 0 id, doc (showString "("), prt 0 exprs, doc (showString ")")])
+    EApp funapp -> prPrec i 6 (concatD [prt 0 funapp])
     EString str -> prPrec i 6 (concatD [prt 0 str])
     Neg expr -> prPrec i 5 (concatD [doc (showString "-"), prt 6 expr])
     Not expr -> prPrec i 5 (concatD [doc (showString "!"), prt 6 expr])
@@ -177,6 +178,30 @@ instance Print Expr where
   prtList _ [] = (concatD [])
   prtList _ [x] = (concatD [prt 0 x])
   prtList _ (x:xs) = (concatD [prt 0 x, doc (showString ","), prt 0 xs])
+instance Print FunApp where
+  prt i e = case e of
+    FnApp id exprs -> prPrec i 0 (concatD [prt 0 id, doc (showString "("), prt 0 exprs, doc (showString ")")])
+
+instance Print ArrElemAcc where
+  prt i e = case e of
+    ArrElem lval expr -> prPrec i 0 (concatD [prt 0 lval, doc (showString "["), prt 0 expr, doc (showString "]")])
+
+instance Print ClsAttrAcc where
+  prt i e = case e of
+    AttrAcc lval id -> prPrec i 0 (concatD [prt 0 lval, doc (showString "."), prt 0 id])
+
+instance Print MethodApp where
+  prt i e = case e of
+    MethApp lval funapp -> prPrec i 0 (concatD [prt 0 lval, doc (showString "."), prt 0 funapp])
+
+instance Print LVal where
+  prt i e = case e of
+    LValVal id -> prPrec i 0 (concatD [prt 0 id])
+    LValFunApp funapp -> prPrec i 0 (concatD [prt 0 funapp])
+    LValMethApp methodapp -> prPrec i 0 (concatD [prt 0 methodapp])
+    LValArrAcc arrelemacc -> prPrec i 0 (concatD [prt 0 arrelemacc])
+    LValAttr clsattracc -> prPrec i 0 (concatD [prt 0 clsattracc])
+
 instance Print AddOp where
   prt i e = case e of
     Plus -> prPrec i 0 (concatD [doc (showString "+")])

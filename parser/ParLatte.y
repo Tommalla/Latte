@@ -28,32 +28,34 @@ import ErrM
   '--' { PT _ (TS _ 13) }
   '.' { PT _ (TS _ 14) }
   '/' { PT _ (TS _ 15) }
-  ';' { PT _ (TS _ 16) }
-  '<' { PT _ (TS _ 17) }
-  '<=' { PT _ (TS _ 18) }
-  '=' { PT _ (TS _ 19) }
-  '==' { PT _ (TS _ 20) }
-  '>' { PT _ (TS _ 21) }
-  '>=' { PT _ (TS _ 22) }
-  '[' { PT _ (TS _ 23) }
-  '[]' { PT _ (TS _ 24) }
-  ']' { PT _ (TS _ 25) }
-  'boolean' { PT _ (TS _ 26) }
-  'class' { PT _ (TS _ 27) }
-  'else' { PT _ (TS _ 28) }
-  'extends' { PT _ (TS _ 29) }
-  'false' { PT _ (TS _ 30) }
-  'if' { PT _ (TS _ 31) }
-  'int' { PT _ (TS _ 32) }
-  'new' { PT _ (TS _ 33) }
-  'return' { PT _ (TS _ 34) }
-  'string' { PT _ (TS _ 35) }
-  'true' { PT _ (TS _ 36) }
-  'void' { PT _ (TS _ 37) }
-  'while' { PT _ (TS _ 38) }
-  '{' { PT _ (TS _ 39) }
-  '||' { PT _ (TS _ 40) }
-  '}' { PT _ (TS _ 41) }
+  ':' { PT _ (TS _ 16) }
+  ';' { PT _ (TS _ 17) }
+  '<' { PT _ (TS _ 18) }
+  '<=' { PT _ (TS _ 19) }
+  '=' { PT _ (TS _ 20) }
+  '==' { PT _ (TS _ 21) }
+  '>' { PT _ (TS _ 22) }
+  '>=' { PT _ (TS _ 23) }
+  '[' { PT _ (TS _ 24) }
+  '[]' { PT _ (TS _ 25) }
+  ']' { PT _ (TS _ 26) }
+  'boolean' { PT _ (TS _ 27) }
+  'class' { PT _ (TS _ 28) }
+  'else' { PT _ (TS _ 29) }
+  'extends' { PT _ (TS _ 30) }
+  'false' { PT _ (TS _ 31) }
+  'for' { PT _ (TS _ 32) }
+  'if' { PT _ (TS _ 33) }
+  'int' { PT _ (TS _ 34) }
+  'new' { PT _ (TS _ 35) }
+  'return' { PT _ (TS _ 36) }
+  'string' { PT _ (TS _ 37) }
+  'true' { PT _ (TS _ 38) }
+  'void' { PT _ (TS _ 39) }
+  'while' { PT _ (TS _ 40) }
+  '{' { PT _ (TS _ 41) }
+  '||' { PT _ (TS _ 42) }
+  '}' { PT _ (TS _ 43) }
 
 L_ident  { PT _ (TV $$) }
 L_integ  { PT _ (TI $$) }
@@ -100,14 +102,15 @@ Stmt :: { Stmt }
 Stmt : ';' { AbsLatte.Empty }
      | Block { AbsLatte.BStmt $1 }
      | Type ListItem ';' { AbsLatte.Decl $1 $2 }
-     | Ident '=' Expr ';' { AbsLatte.Ass $1 $3 }
-     | Ident '++' ';' { AbsLatte.Incr $1 }
-     | Ident '--' ';' { AbsLatte.Decr $1 }
+     | LVal '=' Expr ';' { AbsLatte.Ass $1 $3 }
+     | LVal '++' ';' { AbsLatte.Incr $1 }
+     | LVal '--' ';' { AbsLatte.Decr $1 }
      | 'return' Expr ';' { AbsLatte.Ret $2 }
      | 'return' ';' { AbsLatte.VRet }
      | 'if' '(' Expr ')' Stmt { AbsLatte.Cond $3 $5 }
      | 'if' '(' Expr ')' Stmt 'else' Stmt { AbsLatte.CondElse $3 $5 $7 }
      | 'while' '(' Expr ')' Stmt { AbsLatte.While $3 $5 }
+     | 'for' '(' Type Ident ':' LVal ')' Stmt { AbsLatte.For $3 $4 $6 $8 }
      | Expr ';' { AbsLatte.SExp $1 }
 Item :: { Item }
 Item : Ident { AbsLatte.NoInit $1 }
@@ -119,22 +122,24 @@ Type : 'int' { AbsLatte.Int }
      | 'string' { AbsLatte.Str }
      | 'boolean' { AbsLatte.Bool }
      | 'void' { AbsLatte.Void }
+     | Type '[]' { AbsLatte.Array $1 }
+     | Ident { AbsLatte.Class $1 }
 ListType :: { [Type] }
 ListType : {- empty -} { [] }
          | Type { (:[]) $1 }
          | Type ',' ListType { (:) $1 $3 }
 Expr6 :: { Expr }
-Expr6 : 'new' Ident { AbsLatte.ENewObj $2 }
-      | 'new' Type '[' Integer ']' { AbsLatte.ENewArr $2 $4 }
-      | Ident '[' Integer ']' { AbsLatte.EArrElem $1 $3 }
-      | Ident '.' Ident { AbsLatte.EAttr $1 $3 }
+Expr6 : '(' Type ')null' { AbsLatte.ENullRef $2 }
+      | ClsAttrAcc { AbsLatte.EAttr $1 }
+      | MethodApp { AbsLatte.EMethApp $1 }
+      | ArrElemAcc { AbsLatte.EArrElem $1 }
       | Ident { AbsLatte.EVar $1 }
-      | '(' Type ')null' { AbsLatte.ENullRef $2 }
+      | 'new' Type '[' Expr ']' { AbsLatte.ENewArr $2 $4 }
+      | 'new' Ident { AbsLatte.ENew $2 }
       | Integer { AbsLatte.ELitInt $1 }
       | 'true' { AbsLatte.ELitTrue }
       | 'false' { AbsLatte.ELitFalse }
-      | Ident '.' Ident '(' ListExpr ')' { AbsLatte.EMethApp $1 $3 $5 }
-      | Ident '(' ListExpr ')' { AbsLatte.EApp $1 $3 }
+      | FunApp { AbsLatte.EApp $1 }
       | String { AbsLatte.EString $1 }
       | '(' Expr ')' { $2 }
 Expr5 :: { Expr }
@@ -155,6 +160,20 @@ ListExpr :: { [Expr] }
 ListExpr : {- empty -} { [] }
          | Expr { (:[]) $1 }
          | Expr ',' ListExpr { (:) $1 $3 }
+FunApp :: { FunApp }
+FunApp : Ident '(' ListExpr ')' { AbsLatte.FnApp $1 $3 }
+ArrElemAcc :: { ArrElemAcc }
+ArrElemAcc : LVal '[' Expr ']' { AbsLatte.ArrElem $1 $3 }
+ClsAttrAcc :: { ClsAttrAcc }
+ClsAttrAcc : LVal '.' Ident { AbsLatte.AttrAcc $1 $3 }
+MethodApp :: { MethodApp }
+MethodApp : LVal '.' FunApp { AbsLatte.MethApp $1 $3 }
+LVal :: { LVal }
+LVal : Ident { AbsLatte.LValVal $1 }
+     | FunApp { AbsLatte.LValFunApp $1 }
+     | MethodApp { AbsLatte.LValMethApp $1 }
+     | ArrElemAcc { AbsLatte.LValArrAcc $1 }
+     | ClsAttrAcc { AbsLatte.LValAttr $1 }
 AddOp :: { AddOp }
 AddOp : '+' { AbsLatte.Plus } | '-' { AbsLatte.Minus }
 MulOp :: { MulOp }

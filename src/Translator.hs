@@ -45,16 +45,19 @@ translateProgram (Program topDefs) = do
 
 fillPEnv :: Program -> Translation ()
 fillPEnv (Program topDefs) = do
-    mapM_ (registerFunc) topDefs
-    mapM_ (registerFunc) (map (\(t, name, args) -> FnDef t (Ident name) args $ Block [Empty]) builtins)
+    let fns = map (\(FnDef res) -> res) $ filter (\td -> case td of
+                (FnDef _) -> True
+                _ -> False) topDefs
+    mapM_ (registerFunc) fns
+    mapM_ (registerFunc) (map (\(t, name, args) -> FunDef t (Ident name) args $ Block [Empty]) builtins)
     where
-    registerFunc :: TopDef -> Translation ()
-    registerFunc (FnDef retType ident _ _) = do
+    registerFunc :: FuncDef -> Translation ()
+    registerFunc (FunDef retType ident _ _) = do
         (env, senv, penv, minSize, nextLabel) <- get
         put (env, senv, Map.insert ident retType penv, minSize, nextLabel)
 
 translateTopDef :: TopDef -> Translation Code
-translateTopDef (FnDef t ident args block) = do
+translateTopDef (FnDef (FunDef t ident args block)) = do
     let header = NoIndent $ (unpackIdent ident) ++ ":"
     (env, senv, penv, minSize, _) <- get
     bindArgs args
@@ -93,9 +96,9 @@ translateStmt (Decl t items) = do
     (_, _, _, size, _) <- get
     (_, res) <- allocItems size t items
     return res
-translateStmt (Ass ident expr) = do
+translateStmt (Ass lval expr) = do
     t <- getExprType expr
-    varCode <- getVarCode ident
+    varCode <- getLValCode lval
     if t == Bool then do
         lTrue <- getNextLabel
         lFalse <- getNextLabel
@@ -106,11 +109,11 @@ translateStmt (Ass ident expr) = do
     else do
         exprCode <- translateExpr expr
         return $ CodeBlock [exprCode, popl varCode]
-translateStmt (Incr ident) = do
-    varCode <- getVarCode ident
+translateStmt (Incr lval) = do
+    varCode <- getLValCode lval
     return $ Indent $ "incl " ++ varCode
-translateStmt (Decr ident) = do
-    varCode <- getVarCode ident
+translateStmt (Decr lval) = do
+    varCode <- getLValCode lval
     return $ Indent $ "decl " ++ varCode
 translateStmt (Ret expr) = do
     exprCode <- translateExpr expr
@@ -139,6 +142,7 @@ translateStmt (While expr stmt) = do
     stmtCode <- translateStmt $ toBlock stmt
     return $ CodeBlock [getLabelCode lBegin, exprCode, getLabelCode lLoop, stmtCode, jmp $ getLabel lBegin,
                         getLabelCode lExit]
+translateStmt (For t ident array stmt) = return Noop -- TODO
 translateStmt (SExp expr) = translateExpr expr
 
 boolExprOnStack :: Expr -> Translation Code
@@ -153,14 +157,14 @@ boolExprOnStack expr = do
 -- Invariant: Every expression ends with pushing the result on the stack
 translateExpr :: Expr -> Translation Code
 translateExpr (ENewArr t size) = return Noop -- TODO
-translateExpr (EArrElem ident idx) = return Noop -- TODO
+translateExpr (EArrElem (ArrElem lval expr)) = return Noop -- TODO
 translateExpr (EVar ident) = do
     varCode <- getVarCode ident
     return $ pushl varCode
 translateExpr (ELitInt num) = return $ pushl $ "$" ++ (show num)
 translateExpr ELitTrue = return $ pushl "$1"
 translateExpr ELitFalse = return $ pushl "$0"
-translateExpr (EApp ident args) = do
+translateExpr (EApp (FnApp ident args)) = do
     exprs <- mapM (translateExpr) args
     retType <- getFnRetType ident
     let remParams = map (\_ -> popl ebx) [1..(length args)]
@@ -205,12 +209,17 @@ translateBoolExpr expr lTrue lFalse = do
 
 getExprType :: Expr -> Translation Type
 getExprType (ENewArr t _) = return (Array t)
-getExprType (EArrElem _ _) = undefined -- TODO
+getExprType (EAttr (AttrAcc lval ident)) = do
+    lvalT <- getLValType lval
+    case lvalT of
+        (Array _) -> return Int -- typechecker has already checked if ident is length
+        _ -> undefined -- TODO: classes
+getExprType (EArrElem arrElemAcc) = getLValType (LValArrAcc arrElemAcc)
 getExprType (EVar ident) = getVarType ident
 getExprType (ELitInt _) = return Int
 getExprType ELitTrue = return Bool
 getExprType ELitFalse = return Bool
-getExprType (EApp ident _) = getFnRetType ident
+getExprType (EApp (FnApp ident _)) = getFnRetType ident
 getExprType (EString _) = return Str
 getExprType (Neg _) = return Int
 getExprType (Not _) = return Bool
@@ -220,6 +229,15 @@ getExprType (EAdd _ Minus _) = return Int -- You can subtract ints.
 getExprType (ERel _ _ _) = return Bool
 getExprType (EAnd _ _) = return Bool
 getExprType (EOr _ _) = return Bool
+
+getLValType :: LVal -> Translation Type
+getLValType (LValVal ident) = getVarType ident
+getLValType (LValFunApp (FnApp ident exprs)) = getFnRetType ident
+getLValType (LValMethApp _) = undefined -- TODO
+getLValType (LValArrAcc (ArrElem lval expr)) = do
+    (Array t) <- getLValType lval
+    return t
+getLValType (LValAttr _) = undefined -- TODO
 
 translateBinaryOp :: Expr -> Expr -> MetaOp -> Translation Code
 translateBinaryOp expr1 expr2 metaOp = do
@@ -266,6 +284,10 @@ translateMetaOp (Rel rop) = do
     return $ CodeBlock [popl eax, Indent "cmp %eax, 0(%esp)", Indent $ jmp ++ " " ++ (getLabel lFalse),
                         pushl "$1", Indent $ "jmp " ++ (getLabel lExit), getLabelCode lFalse, Indent "pushl $0",
                         getLabelCode lExit]
+
+getLValCode :: LVal -> Translation String
+getLValCode (LValVal ident) = getVarCode ident
+getLValCode _ = undefined -- TODO
 
 getVarCode :: Ident -> Translation String
 getVarCode ident = do
@@ -406,7 +428,7 @@ extractStringsTopDefs :: [TopDef] -> [String]
 extractStringsTopDefs = concat . map (extractStringsTopDef)
 
 extractStringsTopDef :: TopDef -> [String]
-extractStringsTopDef (FnDef _ _ _ (Block stmts)) = extractStringsStmts stmts
+extractStringsTopDef (FnDef (FunDef _ _ _ (Block stmts))) = extractStringsStmts stmts
 
 extractStringsStmts :: [Stmt] -> [String]
 extractStringsStmts = concat . map (extractStringsStmt)
@@ -420,6 +442,7 @@ extractStringsStmt (Cond expr stmt) = (extractStringsExpr expr) ++ (extractStrin
 extractStringsStmt (CondElse expr stmt1 stmt2) = (extractStringsExpr expr) ++ (extractStringsStmt stmt1) ++
         (extractStringsStmt stmt2)
 extractStringsStmt (While expr stmt) = extractStringsStmt (Cond expr stmt)
+extractStringsStmt (For _ _ lval stmt) = (extractStringsLVal lval) ++ (extractStringsStmt stmt)
 extractStringsStmt (SExp expr) = extractStringsExpr expr
 extractStringsStmt _ = []
 
@@ -429,9 +452,12 @@ extractStringsItem (NoInit _) = [""]
 
 extractStringsExpr :: Expr -> [String]
 extractStringsExpr (EString str) = [str]
-extractStringsExpr (EApp _ exprs) = concat $ map (extractStringsExpr) exprs
+extractStringsExpr (EApp (FnApp _ exprs)) = concat $ map (extractStringsExpr) exprs
 extractStringsExpr (EAdd expr1 Plus expr2) = (extractStringsExpr expr1) ++ (extractStringsExpr expr2)
 extractStringsExpr _ = []
+
+extractStringsLVal :: LVal -> [String]
+extractStringsLVal _ = [] -- TODO
 
 -- Assembler Code:
 -- Builtins:

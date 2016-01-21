@@ -33,18 +33,19 @@ The set of reserved words is the set of terminals appearing in the grammar. Thos
 
 The reserved words used in Latte are the following:
   | ``boolean`` | ``class`` | ``else`` | ``extends``
-  | ``false`` | ``if`` | ``int`` | ``new``
-  | ``return`` | ``string`` | ``true`` | ``void``
-  | ``while`` |  |  | 
+  | ``false`` | ``for`` | ``if`` | ``int``
+  | ``new`` | ``return`` | ``string`` | ``true``
+  | ``void`` | ``while`` |  | 
 
 The symbols used in Latte are the following:
   | { | } | , | (
   | ) | ; | = | ++
-  | -- | [] | [ | ]
-  | . | )null | - | !
-  | && | || | + | *
-  | / | % | < | <=
-  | > | >= | == | !=
+  | -- | : | [] | )null
+  | [ | ] | - | !
+  | && | || | . | +
+  | * | / | % | <
+  | <= | > | >= | ==
+  | != |  |  | 
 
 ===Comments===
 Single-line comments begin with #, //.Multiple-line comments are  enclosed with /* and */.
@@ -79,14 +80,15 @@ All other symbols are terminals.
   | //Stmt// | -> | ``;`` 
   |  |  **|**  | //Block// 
   |  |  **|**  | //Type// //[Item]// ``;`` 
-  |  |  **|**  | //Ident// ``=`` //Expr// ``;`` 
-  |  |  **|**  | //Ident// ``++`` ``;`` 
-  |  |  **|**  | //Ident// ``--`` ``;`` 
+  |  |  **|**  | //LVal// ``=`` //Expr// ``;`` 
+  |  |  **|**  | //LVal// ``++`` ``;`` 
+  |  |  **|**  | //LVal// ``--`` ``;`` 
   |  |  **|**  | ``return`` //Expr// ``;`` 
   |  |  **|**  | ``return`` ``;`` 
   |  |  **|**  | ``if`` ``(`` //Expr// ``)`` //Stmt// 
   |  |  **|**  | ``if`` ``(`` //Expr// ``)`` //Stmt// ``else`` //Stmt// 
   |  |  **|**  | ``while`` ``(`` //Expr// ``)`` //Stmt// 
+  |  |  **|**  | ``for`` ``(`` //Type// //Ident// ``:`` //LVal// ``)`` //Stmt// 
   |  |  **|**  | //Expr// ``;`` 
   | //Item// | -> | //Ident// 
   |  |  **|**  | //Ident// ``=`` //Expr// 
@@ -96,20 +98,22 @@ All other symbols are terminals.
   |  |  **|**  | ``string`` 
   |  |  **|**  | ``boolean`` 
   |  |  **|**  | ``void`` 
+  |  |  **|**  | //Type// ``[]`` 
+  |  |  **|**  | //Ident// 
   | //[Type]// | -> | **eps**
   |  |  **|**  | //Type// 
   |  |  **|**  | //Type// ``,`` //[Type]// 
-  | //Expr6// | -> | ``new`` //Ident// 
-  |  |  **|**  | ``new`` //Type// ``[`` //Integer// ``]`` 
-  |  |  **|**  | //Ident// ``[`` //Integer// ``]`` 
-  |  |  **|**  | //Ident// ``.`` //Ident// 
+  | //Expr6// | -> | ``(`` //Type// ``)null`` 
+  |  |  **|**  | //ClsAttrAcc// 
+  |  |  **|**  | //MethodApp// 
+  |  |  **|**  | //ArrElemAcc// 
   |  |  **|**  | //Ident// 
-  |  |  **|**  | ``(`` //Type// ``)null`` 
+  |  |  **|**  | ``new`` //Type// ``[`` //Expr// ``]`` 
+  |  |  **|**  | ``new`` //Ident// 
   |  |  **|**  | //Integer// 
   |  |  **|**  | ``true`` 
   |  |  **|**  | ``false`` 
-  |  |  **|**  | //Ident// ``.`` //Ident// ``(`` //[Expr]// ``)`` 
-  |  |  **|**  | //Ident// ``(`` //[Expr]// ``)`` 
+  |  |  **|**  | //FunApp// 
   |  |  **|**  | //String// 
   |  |  **|**  | ``(`` //Expr// ``)`` 
   | //Expr5// | -> | ``-`` //Expr6// 
@@ -128,6 +132,15 @@ All other symbols are terminals.
   | //[Expr]// | -> | **eps**
   |  |  **|**  | //Expr// 
   |  |  **|**  | //Expr// ``,`` //[Expr]// 
+  | //FunApp// | -> | //Ident// ``(`` //[Expr]// ``)`` 
+  | //ArrElemAcc// | -> | //LVal// ``[`` //Expr// ``]`` 
+  | //ClsAttrAcc// | -> | //LVal// ``.`` //Ident// 
+  | //MethodApp// | -> | //LVal// ``.`` //FunApp// 
+  | //LVal// | -> | //Ident// 
+  |  |  **|**  | //FunApp// 
+  |  |  **|**  | //MethodApp// 
+  |  |  **|**  | //ArrElemAcc// 
+  |  |  **|**  | //ClsAttrAcc// 
   | //AddOp// | -> | ``+`` 
   |  |  **|**  | ``-`` 
   | //MulOp// | -> | ``*`` 

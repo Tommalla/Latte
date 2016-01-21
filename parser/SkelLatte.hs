@@ -41,14 +41,15 @@ transStmt x = case x of
   Empty -> failure x
   BStmt block -> failure x
   Decl type_ items -> failure x
-  Ass ident expr -> failure x
-  Incr ident -> failure x
-  Decr ident -> failure x
+  Ass lval expr -> failure x
+  Incr lval -> failure x
+  Decr lval -> failure x
   Ret expr -> failure x
   VRet -> failure x
   Cond expr stmt -> failure x
   CondElse expr stmt1 stmt2 -> failure x
   While expr stmt -> failure x
+  For type_ ident lval stmt -> failure x
   SExp expr -> failure x
 transItem :: Item -> Result
 transItem x = case x of
@@ -65,17 +66,17 @@ transType x = case x of
   Class ident -> failure x
 transExpr :: Expr -> Result
 transExpr x = case x of
-  ENewObj ident -> failure x
-  ENewArr type_ integer -> failure x
-  EArrElem ident integer -> failure x
-  EAttr ident1 ident2 -> failure x
-  EVar ident -> failure x
   ENullRef type_ -> failure x
+  EAttr clsattracc -> failure x
+  EMethApp methodapp -> failure x
+  EArrElem arrelemacc -> failure x
+  EVar ident -> failure x
+  ENewArr type_ expr -> failure x
+  ENew ident -> failure x
   ELitInt integer -> failure x
   ELitTrue -> failure x
   ELitFalse -> failure x
-  EMethApp ident1 ident2 exprs -> failure x
-  EApp ident exprs -> failure x
+  EApp funapp -> failure x
   EString string -> failure x
   Neg expr -> failure x
   Not expr -> failure x
@@ -84,6 +85,25 @@ transExpr x = case x of
   ERel expr1 relop expr2 -> failure x
   EAnd expr1 expr2 -> failure x
   EOr expr1 expr2 -> failure x
+transFunApp :: FunApp -> Result
+transFunApp x = case x of
+  FnApp ident exprs -> failure x
+transArrElemAcc :: ArrElemAcc -> Result
+transArrElemAcc x = case x of
+  ArrElem lval expr -> failure x
+transClsAttrAcc :: ClsAttrAcc -> Result
+transClsAttrAcc x = case x of
+  AttrAcc lval ident -> failure x
+transMethodApp :: MethodApp -> Result
+transMethodApp x = case x of
+  MethApp lval funapp -> failure x
+transLVal :: LVal -> Result
+transLVal x = case x of
+  LValVal ident -> failure x
+  LValFunApp funapp -> failure x
+  LValMethApp methodapp -> failure x
+  LValArrAcc arrelemacc -> failure x
+  LValAttr clsattracc -> failure x
 transAddOp :: AddOp -> Result
 transAddOp x = case x of
   Plus -> failure x

@@ -45,11 +45,11 @@ Init.      Item ::= Ident "=" Expr ;
 
 separator nonempty Item "," ;
 
-Ass.       Stmt ::= Ident "=" Expr  ";" ;
+Ass.       Stmt ::= LVal "=" Expr  ";" ;
 
-Incr.      Stmt ::= Ident "++"  ";" ;
+Incr.      Stmt ::= LVal "++"  ";" ;
 
-Decr.      Stmt ::= Ident "--"  ";" ;
+Decr.      Stmt ::= LVal "--"  ";" ;
 
 Ret.       Stmt ::= "return" Expr ";" ;
 
@@ -60,6 +60,8 @@ Cond.      Stmt ::= "if" "(" Expr ")" Stmt  ;
 CondElse.  Stmt ::= "if" "(" Expr ")" Stmt "else" Stmt  ;
 
 While.     Stmt ::= "while" "(" Expr ")" Stmt ;
+
+For.       Stmt ::= "for" "(" Type Ident ":" LVal ")" Stmt;
 
 SExp.      Stmt ::= Expr  ";" ;
 
@@ -75,55 +77,74 @@ Void.      Type ::= "void" ;
 
 internal   Fun. Type ::= Type "(" [Type] ")" ;
 
-internal   Array. Type ::= Type "[]";
+Array.       Type ::= Type "[]";
 
-internal   Class. Type ::= Ident;
+Class.       Type ::= Ident;
 
 separator  Type "," ;
 
 -- Expressions ---------------------------------------------
 
-ENewObj.   Expr6 ::= "new" Ident ;
+ENullRef.     Expr6 ::= "(" Type ")null" ;
 
-ENewArr.   Expr6 ::= "new" Type "[" Integer "]" ;
+EAttr.         Expr6 ::= ClsAttrAcc ;
 
-EArrElem.  Expr6 ::= Ident "[" Integer "]" ;
+EMethApp.      Expr6 ::= MethodApp ;
 
-EAttr.     Expr6 ::= Ident"."Ident ;
+EArrElem.    Expr6 ::= ArrElemAcc ;
 
-EVar.      Expr6 ::= Ident ;
+EVar.          Expr6 ::= Ident ;
 
-ENullRef.  Expr6 ::= "(" Type ")null" ;
+ENewArr.       Expr6 ::= "new" Type "[" Expr "]" ;
 
-ELitInt.   Expr6 ::= Integer ;
+ENew.          Expr6 ::= "new" Ident ;
 
-ELitTrue.  Expr6 ::= "true" ;
+ELitInt.       Expr6 ::= Integer ;
 
-ELitFalse. Expr6 ::= "false" ;
+ELitTrue.      Expr6 ::= "true" ;
 
-EMethApp.  Expr6 ::= Ident"."Ident "(" [Expr] ")" ;
+ELitFalse.     Expr6 ::= "false" ;
 
-EApp.      Expr6 ::= Ident "(" [Expr] ")" ;
+EApp.          Expr6 ::= FunApp ;
 
-EString.   Expr6 ::= String ;
+EString.       Expr6 ::= String ;
 
-Neg.       Expr5 ::= "-" Expr6 ;
+Neg.           Expr5 ::= "-" Expr6 ;
 
-Not.       Expr5 ::= "!" Expr6 ;
+Not.           Expr5 ::= "!" Expr6 ;
 
-EMul.      Expr4 ::= Expr4 MulOp Expr5 ;
+EMul.          Expr4 ::= Expr4 MulOp Expr5 ;
 
-EAdd.      Expr3 ::= Expr3 AddOp Expr4 ;
+EAdd.          Expr3 ::= Expr3 AddOp Expr4 ;
 
-ERel.      Expr2 ::= Expr2 RelOp Expr3 ;
+ERel.          Expr2 ::= Expr2 RelOp Expr3 ;
 
-EAnd.      Expr1 ::= Expr2 "&&" Expr1 ;
+EAnd.          Expr1 ::= Expr2 "&&" Expr1 ;
 
-EOr.       Expr ::= Expr1 "||" Expr ;
+EOr.           Expr ::= Expr1 "||" Expr ;
 
-coercions  Expr 6 ;
+coercions      Expr 6 ;
 
-separator  Expr "," ;
+separator      Expr "," ;
+
+
+-- Parts needed for Arrays and Objects ---------------------
+
+FnApp.  FunApp ::= Ident "(" [Expr] ")" ;
+
+ArrElem. ArrElemAcc ::= LVal "[" Expr "]" ;
+
+AttrAcc. ClsAttrAcc ::= LVal "." Ident ;
+
+MethApp.    MethodApp ::= LVal "." FunApp ;
+
+-- Left Values for Arrays and Objects --------------------------
+
+LValVal.       LVal ::= Ident ;
+LValFunApp.    LVal ::= FunApp ;
+LValMethApp.   LVal ::= MethodApp ;
+LValArrAcc.    LVal ::= ArrElemAcc ;
+LValAttr.      LVal ::= ClsAttrAcc ;
 
 -- operators -----------------------------------------------
 

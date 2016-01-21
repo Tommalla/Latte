@@ -16,7 +16,7 @@ import ParLatte
 import PrintLatte
 
 data TypecheckError = ExactError String | IdentNotFound Ident | UnexpectedRetType Type Type | UnexpectedType Type Type |
-        ArgMismatch Type Arg | WrongArgsNo Int Int | NotNumeric Type | NotBoolConvertible Type | NotAnArray Ident |
+        ArgMismatch Type Arg | WrongArgsNo Int Int | NotNumeric Type | NotBoolConvertible Type | NotAnArray LVal |
         IllegalStringArithmetic Expr | RetTypeMismatch Type Type | Redeclaration Ident
     deriving (Eq)
 type FunType = (Env, Type, [Arg], Block)
@@ -37,7 +37,7 @@ instance Show TypecheckError where
             show found ++ "."
     show (NotNumeric t) = "Expected a numeric type, found: '" ++ show t ++ "'."
     show (NotBoolConvertible t) = "Expected a bool-convertible type, found: '" ++ show t ++ "'."
-    show (NotAnArray ident) = "'" ++ show ident ++ "' expected to be an array."
+    show (NotAnArray expr) = "'" ++ show expr ++ "' expected to be an array."
     show (IllegalStringArithmetic expr) = "Tried to perform arithmetic on strings other than '+' in expression: '" ++
             show expr ++ "'."
     show (RetTypeMismatch expected found) = "Wrong return type. Expected '" ++ show expected ++ "', found '" ++
@@ -64,13 +64,13 @@ typeCheck program = case fst (runState (runExceptT (checkProgram program)) (Map.
 checkProgram :: Program -> Eval ()
 checkProgram (Program topDefs) = do
     mapM_ (\(t, name, args) -> registerFnDef t (Ident name) args (Block [Empty])) builtins
-    mapM_ (\(FnDef retType ident args block) -> registerFnDef retType ident args block) topDefs
+    mapM_ (\(FnDef (FunDef retType ident args block)) -> registerFnDef retType ident args block) topDefs
     mapM_ (checkTopDef) topDefs
     checkFnApp (Ident "main") []  -- TODO toplevel args still unsupported
     return ()
 
 checkTopDef :: TopDef -> Eval ()
-checkTopDef (FnDef retType ident args block) = catchE (checkFnDef retType args block) (\exc ->
+checkTopDef (FnDef (FunDef retType ident args block)) = catchE (checkFnDef retType args block) (\exc ->
     throwE $ ExactError $ "In function '" ++ show ident ++ "': " ++ show exc)
 
 -- Registers the function in env.
@@ -164,18 +164,18 @@ checkStmt (BStmt block) = do
 checkStmt (Decl t items) = do
     mapM_ (declareItem t) items
     return Nothing
-checkStmt (Ass ident expr) = do
-    l <- getType ident
+checkStmt (Ass lval expr) = do
+    l <- getLValType lval
     r <- checkExpr expr
     if l == r then
         return Nothing
     else throwE (UnexpectedType l r)
-checkStmt (Incr ident) = do
-    t <- getType ident
+checkStmt (Incr lval) = do
+    t <- getLValType lval
     if isNumeric t then
         return Nothing
     else throwE (NotNumeric t)
-checkStmt (Decr ident) = checkStmt (Incr ident)
+checkStmt (Decr lval) = checkStmt (Incr lval)
 checkStmt (Ret expr) = do
     res <- checkExpr expr
     return (Just res)
@@ -204,9 +204,42 @@ checkStmt (CondElse expr stmtTrue stmtFalse) = do
         put mem
         return res
 checkStmt (While expr stmt) = checkStmt (Cond expr stmt)
+checkStmt (For t elemId array stmt) = do
+    arrayT <- getLValType array
+    arrayElemT <- case arrayT of
+            (Array res) -> return res
+            _ -> throwE $ NotAnArray array
+    if arrayElemT /= t then
+        throwE $ UnexpectedType t arrayElemT
+    else do
+        mem <- get
+        declare t elemId
+        res <- checkStmt stmt
+        put mem
+        return res
 checkStmt (SExp expr) = do
     checkExpr expr
     return Nothing
+
+checkFunApp :: FunApp -> Eval Type
+checkFunApp (FnApp ident exprs) = do
+    passedTypes <- mapM (checkExpr) exprs
+    checkFnApp ident passedTypes
+
+getLValType :: LVal -> Eval Type
+getLValType (LValVal ident) = getType ident
+getLValType (LValFunApp funApp) = checkFunApp funApp
+getLValType (LValMethApp methodApp) = return Void -- TODO
+getLValType (LValArrAcc (ArrElem lval expr)) = do
+    t <- getLValType lval
+    tExp <- checkExpr expr
+    if tExp /= Int then
+        throwE $ UnexpectedType Int tExp
+    else
+        case t of
+            (Array resT) -> return resT
+            _ -> throwE (NotAnArray lval)
+getLValType (LValAttr clsAttrAcc) = return Void -- TODO
 
 declareItem :: Type -> Item -> Eval ()
 declareItem t (NoInit ident) = declare t ident
@@ -229,21 +262,22 @@ declare t ident = do
         put $ (Map.insert ident (t, level) env, penv, level)
 
 checkExpr :: Expr -> Eval Type
+checkExpr (EAttr (AttrAcc lval ident)) = do
+    lvalT <- getLValType lval
+    case lvalT of
+        (Array t) -> case ident of
+            (Ident "length") -> return Int
+            _ -> throwE $ ExactError $ "Unsupported operation for array: " ++ (show (AttrAcc lval ident))
+        _ -> throwE $ ExactError "Classes not supported yet"
 checkExpr (ENewArr t _) = return (Array t)
-checkExpr (EArrElem ident _) = do
-    t <- getType ident
-    case t of
-        (Array resT) -> return resT
-        _ -> throwE (NotAnArray ident)
+checkExpr (EArrElem arrElemAcc) = getLValType (LValArrAcc arrElemAcc)
 checkExpr (EVar ident) = do
     t <- getType ident
     return t
 checkExpr (ELitInt _) = return Int
 checkExpr ELitTrue = return Bool
 checkExpr ELitFalse = return Bool
-checkExpr (EApp ident exprs) = do
-   passedTypes <- mapM (checkExpr) exprs
-   checkFnApp ident passedTypes
+checkExpr (EApp funApp) = checkFunApp funApp
 checkExpr (EString _) = return Str
 checkExpr (Neg expr) = do
     t <- checkExpr expr
@@ -281,6 +315,7 @@ checkExpr (ERel expr1 rop expr2) = do
         return Bool
 checkExpr (EAnd expr1 expr2) = checkBoolExpr expr1 expr2
 checkExpr (EOr expr1 expr2) = checkBoolExpr expr1 expr2
+checkExpr unknown = throwE $ ExactError $ "Unknown expr: " ++ (show unknown)
 
 checkArithmeticExpr :: Expr -> Expr -> Eval Type
 checkArithmeticExpr expr1 expr2 = do

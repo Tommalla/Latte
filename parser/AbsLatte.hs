@@ -36,14 +36,15 @@ data Stmt
     = Empty
     | BStmt Block
     | Decl Type [Item]
-    | Ass Ident Expr
-    | Incr Ident
-    | Decr Ident
+    | Ass LVal Expr
+    | Incr LVal
+    | Decr LVal
     | Ret Expr
     | VRet
     | Cond Expr Stmt
     | CondElse Expr Stmt Stmt
     | While Expr Stmt
+    | For Type Ident LVal Stmt
     | SExp Expr
   deriving (Eq, Ord, Show, Read)
 
@@ -61,17 +62,17 @@ data Type
   deriving (Eq, Ord, Show, Read)
 
 data Expr
-    = ENewObj Ident
-    | ENewArr Type Integer
-    | EArrElem Ident Integer
-    | EAttr Ident Ident
+    = ENullRef Type
+    | EAttr ClsAttrAcc
+    | EMethApp MethodApp
+    | EArrElem ArrElemAcc
     | EVar Ident
-    | ENullRef Type
+    | ENewArr Type Expr
+    | ENew Ident
     | ELitInt Integer
     | ELitTrue
     | ELitFalse
-    | EMethApp Ident Ident [Expr]
-    | EApp Ident [Expr]
+    | EApp FunApp
     | EString String
     | Neg Expr
     | Not Expr
@@ -80,6 +81,26 @@ data Expr
     | ERel Expr RelOp Expr
     | EAnd Expr Expr
     | EOr Expr Expr
+  deriving (Eq, Ord, Show, Read)
+
+data FunApp = FnApp Ident [Expr]
+  deriving (Eq, Ord, Show, Read)
+
+data ArrElemAcc = ArrElem LVal Expr
+  deriving (Eq, Ord, Show, Read)
+
+data ClsAttrAcc = AttrAcc LVal Ident
+  deriving (Eq, Ord, Show, Read)
+
+data MethodApp = MethApp LVal FunApp
+  deriving (Eq, Ord, Show, Read)
+
+data LVal
+    = LValVal Ident
+    | LValFunApp FunApp
+    | LValMethApp MethodApp
+    | LValArrAcc ArrElemAcc
+    | LValAttr ClsAttrAcc
   deriving (Eq, Ord, Show, Read)
 
 data AddOp = Plus | Minus
