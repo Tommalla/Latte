@@ -98,26 +98,33 @@ translateStmt (Decl t items) = do
     return res
 translateStmt (Ass lval expr) = do
     t <- getExprType expr
-    varCode <- getLValCode lval
-    if t == Bool then do
-        lTrue <- getNextLabel
-        lFalse <- getNextLabel
-        lExit <- getNextLabel
-        exprCode <- translateBoolExpr expr lTrue lFalse
-        return $ CodeBlock [exprCode, getLabelCode lTrue, movl "$1" varCode, jmp $ getLabel lExit,
-                            getLabelCode lFalse, movl "$0" varCode, getLabelCode lExit]
-    else do
-        exprCode <- translateExpr expr
-        return $ CodeBlock [exprCode, popl varCode]
-translateStmt (Incr lval) = do
-    varCode <- getLValCode lval
-    return $ Indent $ "incl " ++ varCode
-translateStmt (Decr lval) = do
-    varCode <- getLValCode lval
-    return $ Indent $ "decl " ++ varCode
-translateStmt (Ret expr) = do
+    lvalCode <- translateLVal lval
     exprCode <- translateExpr expr
-    return $ CodeBlock [exprCode, popl eax, leaveProtocol]
+    let commonCode = CodeBlock [lvalCode, exprCode]
+    case t of
+        Bool -> do
+            lTrue <- getNextLabel
+            lFalse <- getNextLabel
+            lExit <- getNextLabel
+            exprCode <- translateBoolExpr expr lTrue lFalse
+            return $ CodeBlock [lvalCode, exprCode, popl eax, getLabelCode lTrue, movl "$1" $ "(%eax)",
+                                jmp $ getLabel lExit, getLabelCode lFalse, movl "$0" "(%eax)", getLabelCode lExit]
+        (Array _) -> return $ CodeBlock [commonCode, popl eax, popl ebx, popl ecx, movl ebx "(%ecx)",
+                                         Indent $ "addl $4, " ++ ecx, movl eax "(%ecx)"]
+        _ -> return $ CodeBlock [commonCode, popl eax, popl ebx, movl eax "(%ebx)"]
+translateStmt (Incr lval) = do
+    lvalCode <- translateLVal lval
+    return $ CodeBlock [lvalCode, popl eax, Indent "incl (%eax)"]
+translateStmt (Decr lval) = do
+    lvalCode <- translateLVal lval
+    return $ CodeBlock [lvalCode, popl eax, Indent "decl (%eax)"]
+translateStmt (Ret expr) = do
+    t <- getExprType expr
+    exprCode <- translateExpr expr
+    case t of
+        (Array _) -> return $ CodeBlock [exprCode, popl edx, popl eax, leaveProtocol]
+            -- in case of array, return ptr to array
+        _ -> return $ CodeBlock [exprCode, popl eax, leaveProtocol]
 translateStmt VRet = return leaveProtocol
 translateStmt (Cond expr stmt) = do
     lTrue <- getNextLabel
@@ -156,21 +163,41 @@ boolExprOnStack expr = do
 
 -- Invariant: Every expression ends with pushing the result on the stack
 translateExpr :: Expr -> Translation Code
-translateExpr (ENewArr t size) = return Noop -- TODO
-translateExpr (EArrElem (ArrElem lval expr)) = return Noop -- TODO
+translateExpr (ENewArr t expr) = do
+    exprCode <- translateExpr expr
+    return $ CodeBlock [pushl $ "$" ++ (show $ getSize t), exprCode, call $ Ident "calloc", popl ebx, popl ecx,
+                        pushl eax, pushl ebx]
+translateExpr (EArrElem arrElem) = do
+    lvalCode <- translateLVal (LValArrAcc arrElem)
+    return $ CodeBlock [lvalCode, popl eax, pushl "(%eax)"]
 translateExpr (EVar ident) = do
+    t <- getVarType ident
     varCode <- getVarCode ident
-    return $ pushl varCode
+    case t of
+        (Array _) -> do
+            sizeCode <- getVarCodeOffset ident arrayOffset
+            return $ CodeBlock [pushl varCode, pushl sizeCode]
+        _ -> return $ pushl varCode
 translateExpr (ELitInt num) = return $ pushl $ "$" ++ (show num)
 translateExpr ELitTrue = return $ pushl "$1"
 translateExpr ELitFalse = return $ pushl "$0"
 translateExpr (EApp (FnApp ident args)) = do
     exprs <- mapM (translateExpr) args
+    argsSize <- getArgsSize args
+    let remParams = map (\_ -> popl ebx) [1..argsSize]
+    let commonCode = CodeBlock [CodeBlock exprs, call ident, CodeBlock remParams]
     retType <- getFnRetType ident
-    let remParams = map (\_ -> popl ebx) [1..(length args)]
-    if retType /= Void then
-        return $ CodeBlock [CodeBlock exprs, call ident, CodeBlock remParams, pushl eax]
-    else return $ CodeBlock [CodeBlock exprs, call ident, CodeBlock remParams]
+    case retType of
+        (Array _) -> return $ CodeBlock [commonCode, pushl eax, pushl edx]
+        Void -> return commonCode
+        _ -> return $ CodeBlock [commonCode, pushl eax]
+    where
+    getArgsSize :: [Expr] -> Translation Int
+    getArgsSize = foldM (\res arg -> do
+        t <- getExprType arg
+        return $ res + (case t of
+                (Array _) -> 2   -- Arrays are two 4-byte values on the stack
+                _ -> 1)) 0
 translateExpr (EString str) = do
     lStr <- getStringLabel str
     return $ pushl $ "$" ++ lStr
@@ -204,7 +231,8 @@ translateBoolExpr expr lTrue lFalse = do
     case exprType of
         Bool -> do
             exprCode <- translateExpr expr
-            return $ CodeBlock [exprCode, popl eax, testl eax eax, Indent $ "jnz " ++ (getLabel lTrue), jmp $ getLabel lFalse]
+            return $ CodeBlock [exprCode, popl eax, testl eax eax, Indent $ "jnz " ++ (getLabel lTrue),
+                                jmp $ getLabel lFalse]
         _ -> translateBoolExpr (ERel expr GTH (ELitInt 0)) lTrue lFalse
 
 getExprType :: Expr -> Translation Type
@@ -258,11 +286,11 @@ translateStringAddition :: Expr -> Expr -> Translation Code
 translateStringAddition expr1 expr2 = do
     expr1Code <- translateExpr expr1
     expr2Code <- translateExpr expr2
-    return $ CodeBlock [expr1Code, expr2Code, swapArgs, call concatStrings, pushl eax]
+    return $ CodeBlock [expr1Code, expr2Code, swapArgs, call concatStrings, popl ebx, popl ebx, pushl eax]
 
 translateMetaOp :: MetaOp -> Translation Code
 translateMetaOp (Mul mop) = do
-    let divOp = [popl ebx, popl eax, Indent "movl %eax, %edx", Indent "sar $31, %edx",
+    let divOp = [popl ebx, popl eax, movl eax edx, Indent "sar $31, %edx",
                  Indent "idiv %ebx"]
     return $ case mop of
             Times -> CodeBlock [popl eax, Indent "imul 0(%esp), %eax", movl eax "0(%esp)"]
@@ -285,14 +313,27 @@ translateMetaOp (Rel rop) = do
                         pushl "$1", Indent $ "jmp " ++ (getLabel lExit), getLabelCode lFalse, Indent "pushl $0",
                         getLabelCode lExit]
 
-getLValCode :: LVal -> Translation String
-getLValCode (LValVal ident) = getVarCode ident
-getLValCode _ = undefined -- TODO
+-- Translates the whole LVal into the code that leaves a pointer to lval on the stack.
+translateLVal :: LVal -> Translation Code
+translateLVal (LValVal ident) = do
+    varCode <- getVarCode ident
+    return $ CodeBlock [Indent $ "leal " ++ varCode ++ ", " ++ eax, pushl eax]  -- Single ref
+translateLVal (LValFunApp fApp) = translateExpr (EApp fApp)
+translateLVal (LValArrAcc (ArrElem lval expr)) = do
+    lvalCode <- translateLVal lval
+    -- dereference pointer and return value
+    exprCode <- translateExpr expr
+    return $ CodeBlock [lvalCode, exprCode, popl eax, popl ebx, movl "(%ebx)" ecx,
+                        Indent $ "leal (%ecx, %eax, 4), " ++ ebx, pushl ebx]    -- Single ref
+translateLVal _ = undefined -- TODO
 
 getVarCode :: Ident -> Translation String
-getVarCode ident = do
-    offset <- getVarIdx ident
-    return $ (show offset) ++ "(%ebp)"
+getVarCode ident = getVarCodeOffset ident 0
+
+getVarCodeOffset :: Ident -> Int -> Translation String
+getVarCodeOffset ident offset = do
+    origOffset <- getVarIdx ident
+    return $ (show $ origOffset + offset) ++ "(%ebp)"
 
 getVarType :: Ident -> Translation Type
 -- getVarType ident | trace ("getVarType " ++ show ident) False = undefined
@@ -330,6 +371,7 @@ getSize :: Type -> Int
 getSize Int = 4
 getSize Bool = 4    -- Yes, let's use ints for now for consistency [FIXME]
 getSize Str = 4     -- Ptr to actual string
+getSize (Array _) = 8  -- Ptr to allocated space + size
 getSize _ = 0   -- TODO
 
 allocVars :: [Stmt] -> Translation Code
@@ -369,12 +411,19 @@ allocItem lastSize t item = do
     (env, senv, penv, minSize, nextLabel) <- get
     put (Map.insert ident (t, (lastSize - size)) env, senv, penv, min minSize (lastSize - size), nextLabel)
     varCode <- getVarCode ident
-    return $ (lastSize - size, CodeBlock [exprCode, popl varCode])
+    -- if array - store it's size
+    code <- case t of
+        (Array _) -> do
+            sizeCode <- getVarCodeOffset ident arrayOffset
+            return [exprCode, popl sizeCode, popl varCode]
+        _ -> return [exprCode, popl varCode]
+    return $ (lastSize - size, CodeBlock code)
 
 getInitExpr :: Type -> Item -> Translation Expr
 getInitExpr t (NoInit ident) = do
     case t of
         Str -> return $ EString ""
+        (Array arrT) -> return $ ENewArr arrT $ ELitInt 0
         _ -> return $ ELitInt 0
 getInitExpr _ (Init _ expr) = return expr
 
@@ -460,6 +509,9 @@ extractStringsLVal :: LVal -> [String]
 extractStringsLVal _ = [] -- TODO
 
 -- Assembler Code:
+arrayOffset :: Int
+arrayOffset = 4
+
 -- Builtins:
 concatStrings :: Ident
 concatStrings = Ident "__concatStrings"

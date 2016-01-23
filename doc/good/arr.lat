@@ -1,5 +1,31 @@
+void printArr(int[] arr, int n) {
+    int i = 0;
+    while (i < n) {
+        printInt(arr[i]);
+        i++;
+    }
+}
+
+int[] prepArr(int size) {
+    int[] res = new int[size];
+    res[size - 1] = 666;
+    return res;
+}
+
 int main() {
-    int[] a = new int[10];
-    a[0] = 1;
+    int[] a = new int[9];
+    // a = new int[10];
+    // printArr(a, 10);
+    // a[0] = 1;
+    // int i;
+    // i = 10;
+    // a[1] = i;
+    // printString("==");
+    // printArr(a, 10);
+    // printString("===");
+    int[] hardCore = prepArr(11);
+    printArr(hardCore, 11);
+    a = hardCore;
+    printArr(a, 11);
     return 0;
 }
