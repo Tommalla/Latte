@@ -20,7 +20,7 @@ data MetaOp = Mul MulOp | Add AddOp | Rel RelOp
 type Env = Map.Map Ident (Type, Int)
 type SEnv = Map.Map String String  -- Maps string to its label
 type PEnv = Map.Map Ident Type -- Maps procedures to returned type
-type Translation a = State (Env, SEnv, PEnv, Int, Int) a  -- Env, -Local stack size, Max label number
+type Translation a = State (Env, SEnv, PEnv, Int, Int, Int) a  -- Env, -Local stack size, Max label number
 
 instance Show Code where
     show (NoIndent str) = str
@@ -32,7 +32,7 @@ instance Show Code where
 
 translate :: Program -> String
 translate program = (".globl main\n\n" ++
-        (show $ fst (runState (translateProgram program) (Map.empty, Map.empty, Map.empty, 0, 0))) ++ "\n")
+        (show $ fst (runState (translateProgram program) (Map.empty, Map.empty, Map.empty, 0, 0, 0))) ++ "\n")
 
 -- Top-level translation -----------------------------------------------------------------------------------------------
 
@@ -46,11 +46,11 @@ translateProgram (Program topDefs) = do
 translateTopDef :: TopDef -> Translation Code
 translateTopDef (FnDef (FunDef t ident args block)) = do
     let header = NoIndent $ (unpackIdent ident) ++ ":"
-    (env, senv, penv, minSize, _) <- get
+    (env, senv, penv, minSize, _, maxTemp) <- get
     bindArgs args
     blockCode <- translateBlock block
-    (_, _, _, _, nextLabel) <- get
-    put (env, senv, penv, minSize, nextLabel)
+    (_, _, _, _, nextLabel, _) <- get
+    put (env, senv, penv, minSize, nextLabel, maxTemp)
     let (Block stmts) = block
     let doRet = if null stmts then True else
             case last stmts of
@@ -76,13 +76,13 @@ translateBlock (Block stmts) = do
 translateStmt :: Stmt -> Translation Code
 translateStmt Empty = return Noop
 translateStmt (BStmt (Block stmts)) = do
-    (env, penv, senv, minSize, _) <- get
+    (env, penv, senv, minSize, _, maxTemp) <- get
     res <- mapM (translateStmt) stmts
-    (_, _, _, _, nextLabel) <- get
-    put (env, penv, senv, minSize, nextLabel)
+    (_, _, _, _, nextLabel, _) <- get
+    put (env, penv, senv, minSize, nextLabel, maxTemp)
     return $ CodeBlock res
 translateStmt (Decl t items) = do
-    (_, _, _, size, _) <- get
+    (_, _, _, size, _, _) <- get
     (_, res) <- allocItems size t items
     return res
 translateStmt (Ass lval expr) = do
@@ -98,8 +98,8 @@ translateStmt (Ass lval expr) = do
             exprCode <- translateBoolExpr expr lTrue lFalse
             return $ CodeBlock [lvalCode, exprCode, popl eax, getLabelCode lTrue, movl "$1" $ "(%eax)",
                                 jmp $ getLabel lExit, getLabelCode lFalse, movl "$0" "(%eax)", getLabelCode lExit]
-        (Array _) -> return $ CodeBlock [commonCode, popl eax, popl ebx, popl ecx, movl ebx "(%ecx)",
-                                         Indent $ "addl $4, " ++ ecx, movl eax "(%ecx)"]
+        (Array _) -> return $ CodeBlock [commonCode, popl eax, popl ebx, popl ecx, movl eax "(%ecx)",
+                                         Indent $ "addl $4, " ++ ecx, movl ebx "(%ecx)"]
         _ -> return $ CodeBlock [commonCode, popl eax, popl ebx, movl eax "(%ebx)"]
 translateStmt (Incr lval) = do
     lvalCode <- translateLVal lval
@@ -111,7 +111,7 @@ translateStmt (Ret expr) = do
     t <- getExprType expr
     exprCode <- translateExpr expr
     case t of
-        (Array _) -> return $ CodeBlock [exprCode, popl edx, popl eax, leaveProtocol]
+        (Array _) -> return $ CodeBlock [exprCode, popl eax, popl edx, leaveProtocol]
             -- in case of array, return ptr to array
         _ -> return $ CodeBlock [exprCode, popl eax, leaveProtocol]
 translateStmt VRet = return leaveProtocol
@@ -138,17 +138,35 @@ translateStmt (While expr stmt) = do
     stmtCode <- translateStmt $ toBlock stmt
     return $ CodeBlock [getLabelCode lBegin, exprCode, getLabelCode lLoop, stmtCode, jmp $ getLabel lBegin,
                         getLabelCode lExit]
-translateStmt (For t ident array stmt) = return Noop -- TODO
+translateStmt (For t ident array stmt) = do
+    (env, penv, senv, minSize, prevNextLabel, maxTemp) <- get
+    put (env, penv, senv, minSize, prevNextLabel, maxTemp + 1)
+    let tempCnt = Ident $ "$" ++ (show maxTemp)
+    res <- translateStmt $ BStmt $ Block [
+            Decl Int [NoInit tempCnt], -- Declare temp counter
+            While (ERel (EVar tempCnt) LTH (EAttr (AttrAcc array $ Ident "length"))) $ BStmt $ Block [
+                    Decl t [Init ident $ EArrElem $ ArrElem array $ EVar tempCnt], -- ident = array[temp]
+                    stmt,  -- code
+                    Incr $ LValVal tempCnt]] -- temp ++
+    (_, _, _, _, nextLabel, _) <- get
+    put (env, penv, senv, minSize, nextLabel, maxTemp)
+    return res
 translateStmt (SExp expr) = translateExpr expr
 
 -- Expressions ---------------------------------------------------------------------------------------------------------
 
 -- Invariant: Every expression ends with pushing the result on the stack
 translateExpr :: Expr -> Translation Code
+translateExpr (EAttr (AttrAcc lval ident)) = do
+    lvalCode <- translateLVal lval
+    t <- getLValType lval
+    case t of
+        (Array _) -> return $ CodeBlock [lvalCode, popl eax, pushl "4(%eax)"]  -- Array length
+        _ -> undefined -- TODO [classes]
 translateExpr (ENewArr t expr) = do
     exprCode <- translateExpr expr
     return $ CodeBlock [pushl $ "$" ++ (show $ getSize t), exprCode, call $ Ident "calloc", popl ebx, popl ecx,
-                        pushl eax, pushl ebx]
+                        pushl ebx, pushl eax]
 translateExpr (EArrElem arrElem) = do
     lvalCode <- translateLVal (LValArrAcc arrElem)
     return $ CodeBlock [lvalCode, popl eax, pushl "(%eax)"]
@@ -158,7 +176,7 @@ translateExpr (EVar ident) = do
     case t of
         (Array _) -> do
             sizeCode <- getVarCodeOffset ident arrayOffset
-            return $ CodeBlock [pushl varCode, pushl sizeCode]
+            return $ CodeBlock [pushl sizeCode, pushl varCode]
         _ -> return $ pushl varCode
 translateExpr (ELitInt num) = return $ pushl $ "$" ++ (show num)
 translateExpr ELitTrue = return $ pushl "$1"
@@ -170,7 +188,7 @@ translateExpr (EApp (FnApp ident args)) = do
     let commonCode = CodeBlock [CodeBlock exprs, call ident, CodeBlock remParams]
     retType <- getFnRetType ident
     case retType of
-        (Array _) -> return $ CodeBlock [commonCode, pushl eax, pushl edx]
+        (Array _) -> return $ CodeBlock [commonCode, pushl edx, pushl eax]
         Void -> return commonCode
         _ -> return $ CodeBlock [commonCode, pushl eax]
     where
@@ -284,6 +302,7 @@ translateLVal (LValArrAcc (ArrElem lval expr)) = do
     exprCode <- translateExpr expr
     return $ CodeBlock [lvalCode, exprCode, popl eax, popl ebx, movl "(%ebx)" ecx,
                         Indent $ "leal (%ecx, %eax, 4), " ++ ebx, pushl ebx]    -- Single ref
+translateLVal (LValAttr (AttrAcc lval ident)) = undefined -- TODO (classes)
 translateLVal _ = undefined -- TODO
 
 -- Declaration/args ----------------------------------------------------------------------------------------------------
@@ -297,8 +316,11 @@ bindArgs args = do
     bindArgsHelper :: Int -> [Arg] -> Translation Int
     bindArgsHelper lastSize ((Arg t ident):rest) = do
         let allocSize = getSize t
-        (env, senv, penv, minSize, nextLabel) <- get
-        put (Map.insert ident (t, lastSize + allocSize) env, senv, penv, minSize, nextLabel)
+        (env, senv, penv, minSize, nextLabel, maxTemp) <- get
+        let addr = lastSize + allocSize - (case t of
+                (Array _) -> 4
+                _ -> 0)
+        put (Map.insert ident (t, addr) env, senv, penv, minSize, nextLabel, maxTemp)
         bindArgsHelper (lastSize + allocSize) rest
     bindArgsHelper res [] = return res
 
@@ -319,6 +341,10 @@ allocVars stmts = do
             (Cond _ stmt) -> allocVarsHelper lastSize (stmt:rest)
             (CondElse _ s1 s2) -> allocVarsHelper lastSize (s1:(s2:rest))
             (While _ stmt) -> allocVarsHelper lastSize (stmt:rest)
+            (For t ident _ stmt) -> do
+                (newSize, _) <- allocItems lastSize t [NoInit ident]
+                (maxSize, _) <- allocItems newSize Int [NoInit $ Ident "whatever"] -- temp variable
+                allocVarsHelper maxSize (stmt:rest)
             _ -> allocVarsHelper lastSize rest
     allocVarsHelper res [] = return res
 
@@ -336,14 +362,14 @@ allocItem lastSize t item = do
     initExpr <- getInitExpr t item
     exprCode <- translateExpr initExpr
     let ident = getItemIdent item
-    (env, senv, penv, minSize, nextLabel) <- get
-    put (Map.insert ident (t, (lastSize - size)) env, senv, penv, min minSize (lastSize - size), nextLabel)
+    (env, senv, penv, minSize, nextLabel, maxTemp) <- get
+    put (Map.insert ident (t, (lastSize - size)) env, senv, penv, min minSize (lastSize - size), nextLabel, maxTemp)
     varCode <- getVarCode ident
     -- if array - store it's size
     code <- case t of
         (Array _) -> do
             sizeCode <- getVarCodeOffset ident arrayOffset
-            return [exprCode, popl sizeCode, popl varCode]
+            return [exprCode, popl varCode, popl sizeCode]
         _ -> return [exprCode, popl varCode]
     return $ (lastSize - size, CodeBlock code)
 
@@ -382,7 +408,7 @@ getExprType (EOr _ _) = return Bool
 
 getFnRetType :: Ident -> Translation Type
 getFnRetType ident = do
-    (_, _, penv, _, _) <- get
+    (_, _, penv, _, _, _) <- get
     return $ penv Map.! ident
 
 getLValType :: LVal -> Translation Type
@@ -392,7 +418,11 @@ getLValType (LValMethApp _) = undefined -- TODO
 getLValType (LValArrAcc (ArrElem lval expr)) = do
     (Array t) <- getLValType lval
     return t
-getLValType (LValAttr _) = undefined -- TODO
+getLValType (LValAttr (AttrAcc lval ident)) = do
+    lvalT <- getLValType lval
+    case lvalT of
+        (Array _) -> return Int -- We know from typechecker this has to be length
+        _ -> undefined -- TODO
 
 -- Env-related utils ---------------------------------------------------------------------------------------------------
 
@@ -406,13 +436,13 @@ fillPEnv (Program topDefs) = do
     where
     registerFunc :: FuncDef -> Translation ()
     registerFunc (FunDef retType ident _ _) = do
-        (env, senv, penv, minSize, nextLabel) <- get
-        put (env, senv, Map.insert ident retType penv, minSize, nextLabel)
+        (env, senv, penv, minSize, nextLabel, maxTemp) <- get
+        put (env, senv, Map.insert ident retType penv, minSize, nextLabel, maxTemp)
 
 getNextLabel :: Translation Int
 getNextLabel = do
-    (env, senv, penv, minSize, nextLabel) <- get
-    put (env, senv, penv, minSize, nextLabel + 1)
+    (env, senv, penv, minSize, nextLabel, maxTemp) <- get
+    put (env, senv, penv, minSize, nextLabel + 1, maxTemp)
     return nextLabel
 
 getVarCode :: Ident -> Translation String
@@ -426,12 +456,12 @@ getVarCodeOffset ident offset = do
 getVarIdx :: Ident -> Translation Int
 -- getVarIdx ident | trace ("getVarIdx " ++ show ident) False = undefined
 getVarIdx ident = do
-    (env, _, _, _, _) <- get
+    (env, _, _, _, _, _) <- get
     return $ snd $ env Map.! ident
 
 getVarType :: Ident -> Translation Type
 getVarType ident = do
-    (env, _, _, _, _) <- get
+    (env, _, _, _, _, _) <- get
     return $ fst $ env Map.! ident
 
 -- Strings / string labels ---------------------------------------------------------------------------------------------
@@ -452,14 +482,14 @@ storeString str = do
 
 getStringLabel :: String -> Translation String
 getStringLabel str = do
-    (_, senv, _, _, _) <- get
+    (_, senv, _, _, _, _) <- get
     return $ senv Map.! str
 
 registerString :: String -> Int -> Translation ()
 registerString str idx = do
-    (env, senv, penv, minSize, nextLabel) <- get
+    (env, senv, penv, minSize, nextLabel, maxTemp) <- get
     let sLabel = ".S" ++ (show idx)
-    put (env, Map.insert str sLabel senv, penv, minSize, nextLabel)
+    put (env, Map.insert str sLabel senv, penv, minSize, nextLabel, maxTemp)
 
 -- Utils ---------------------------------------------------------------------------------------------------------------
 

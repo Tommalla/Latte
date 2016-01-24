@@ -1,8 +1,6 @@
-void printArr(int[] arr, int n) {
-    int i = 0;
-    while (i < n) {
-        printInt(arr[i]);
-        i++;
+void printArr(int[] arr) {
+    for (int elem : arr) {
+        printInt(elem);
     }
 }
 
@@ -14,6 +12,8 @@ int[] prepArr(int size) {
 
 int main() {
     int[] a = new int[9];
+    printInt(a.length);
+    printArr(a);
     // a = new int[10];
     // printArr(a, 10);
     // a[0] = 1;
@@ -24,9 +24,11 @@ int main() {
     // printArr(a, 10);
     // printString("===");
     int[] hardCore = prepArr(11);
-    printArr(hardCore, 11);
+    printInt(hardCore.length);
+    printArr(hardCore);
     a = hardCore;
-    hardCore[1] = 2;
-    printArr(a, 11);
+    hardCore[1];
+    printArr(a);
+    printInt(a.length);
     return 0;
 }
