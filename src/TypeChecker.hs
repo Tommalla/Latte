@@ -18,7 +18,7 @@ import PrintLatte
 data TypecheckError = ExactError String | IdentNotFound Ident | UnexpectedRetType Type Type | UnexpectedType Type Type |
         ArgMismatch Type Arg | WrongArgsNo Int Int | NotNumeric Type | NotBoolConvertible Type | NotAnArray LVal |
         IllegalStringArithmetic Expr | RetTypeMismatch Type Type | Redeclaration Ident | UnknownClass Ident |
-        UnknownAttribute Ident Ident
+        UnknownAttribute Ident Ident | NotAnObject Type
     deriving (Eq)
 type FunType = (Env, Type, [Arg], Block)
 type ClsType = (Maybe Ident, Env, PEnv)
@@ -49,6 +49,7 @@ instance Show TypecheckError where
     show (UnknownClass ident) = "Unknown class: '" ++ show ident ++ "'."
     show (UnknownAttribute clsName attrName) = "Unknown attribute '" ++ show attrName ++ "' of class '" ++
             show clsName ++ "'."
+    show (NotAnObject found) = "Expected an object, found: " ++ show found
 
 incLevel :: Eval ()
 incLevel = do
@@ -118,6 +119,9 @@ checkClassDefMeta ident parentIdent cdefs = catchE (checkClassDef ident parentId
 
 checkClassDef :: Ident -> Maybe Ident -> [CDef] -> Eval ()
 checkClassDef ident parentIdent cdefs = do
+    when (isJust parentIdent) (do
+            getClsEnv $ fromJust parentIdent
+            return ()) -- Check for parent
     -- FIXME: check for var redefinition with different type (from superclass)
     -- All the vars have already been registered, we just need to check the functions
     (classEnv, classPEnv) <- getClsEnv ident
@@ -126,7 +130,7 @@ checkClassDef ident parentIdent cdefs = do
             _ -> False) cdefs
     mapM_ (\(Method (FunDef retT fName args block)) -> do
         (env, penv, cenv, level) <- get
-        put (classEnv, Map.union penv classPEnv, cenv, level + 1)
+        put (Map.insert (Ident "self") (Class ident, level + 1) classEnv, Map.union penv classPEnv, cenv, level + 1)
         checkFnDef retT args block
         put (env, penv, Map.insert ident (parentIdent, classEnv, classPEnv) cenv, level)) methods
 
@@ -150,7 +154,8 @@ checkFnDef retType args block = do
     mapM_ (registerArg) args
     actRetType <- checkTopLevelBlock block
     put mem
-    if retType == actRetType then
+    ok <- typesMatch retType actRetType
+    if ok then
         return ()
     else throwE $ UnexpectedRetType retType actRetType
     where
@@ -196,7 +201,8 @@ bindArgs args passedTypes = do
 
 bindArg :: Arg -> Type -> Eval ()
 bindArg (Arg t ident) passedType = do
-    if passedType == t then
+    ok <- typesMatch t passedType
+    if ok then
         declare t ident
     else throwE $ ArgMismatch passedType (Arg t ident)
 
@@ -238,7 +244,8 @@ checkStmt (Decl t items) = do
 checkStmt (Ass lval expr) = do
     l <- getLValType lval
     r <- checkExpr expr
-    if l == r then
+    ok <- typesMatch l r
+    if ok then
         return Nothing
     else throwE (UnexpectedType l r)
 checkStmt (Incr lval) = do
@@ -262,6 +269,7 @@ checkStmt (CondElse expr stmtTrue stmtFalse) = do
                 resTrue <- oneClauseCondStmt stmtTrue
                 resFalse <- oneClauseCondStmt stmtFalse
                 if not (isNothing resTrue) && not (isNothing resFalse) then do
+                    -- FIXME fix for polymorphism
                     if resTrue /= resFalse then
                         throwE $ RetTypeMismatch (fromJust resTrue) (fromJust resFalse)
                     else return resTrue
@@ -280,7 +288,8 @@ checkStmt (For t elemId array stmt) = do
     arrayElemT <- case arrayT of
             (Array res) -> return res
             _ -> throwE $ NotAnArray array
-    if arrayElemT /= t then
+    ok <- typesMatch t arrayElemT
+    if not ok then
         throwE $ UnexpectedType t arrayElemT
     else do
         mem <- get
@@ -300,7 +309,17 @@ checkFunApp (FnApp ident exprs) = do
 getLValType :: LVal -> Eval Type
 getLValType (LValVal ident) = getType ident
 getLValType (LValFunApp funApp) = checkFunApp funApp
-getLValType (LValMethApp methodApp) = return Void -- TODO
+getLValType (LValMethApp (MethApp lval funApp)) = do
+    t <- getLValType lval
+    case t of
+        (Class cName) -> do
+            (_, _, cPEnv) <- getClass cName
+            (env, penv, cenv, level) <- get
+            put (env, Map.union cPEnv penv, cenv, level)
+            res <- checkFunApp funApp
+            put (env, penv, cenv, level)
+            return res
+        _ -> throwE $ NotAnObject t
 getLValType (LValArrAcc (ArrElem lval expr)) = do
     t <- getLValType lval
     tExp <- checkExpr expr
@@ -318,12 +337,14 @@ getLValType (LValAttr (AttrAcc lval ident)) = do
             case Map.lookup ident cEnv of
                 (Just (resT, _)) -> return resT
                 Nothing -> throwE $ UnknownAttribute cName ident
+        _ -> throwE $ NotAnObject t
 
 declareItem :: Type -> Item -> Eval ()
 declareItem t (NoInit ident) = declare t ident
 declareItem t (Init ident expr) = do
     resT <- checkExpr expr
-    if resT == t then
+    ok <- typesMatch t resT
+    if ok then
         declare t ident
     else throwE (UnexpectedType t resT)
 
@@ -348,6 +369,7 @@ checkExpr (EAttr (AttrAcc lval ident)) = do
             (Ident "length") -> return Int
             _ -> throwE $ ExactError $ "Unsupported operation for array: " ++ (show (AttrAcc lval ident))
         _ -> getLValType $ LValAttr $ AttrAcc lval ident
+checkExpr (EMethApp methodApp) = getLValType (LValMethApp methodApp)
 checkExpr (EArrElem arrElemAcc) = getLValType (LValArrAcc arrElemAcc)
 checkExpr (EVar ident) = do
     t <- getType ident
@@ -395,7 +417,6 @@ checkExpr (ERel expr1 rop expr2) = do
         return Bool
 checkExpr (EAnd expr1 expr2) = checkBoolExpr expr1 expr2
 checkExpr (EOr expr1 expr2) = checkBoolExpr expr1 expr2
-checkExpr unknown = throwE $ ExactError $ "Unknown expr: " ++ (show unknown)
 
 checkArithmeticExpr :: Expr -> Expr -> Eval Type
 checkArithmeticExpr expr1 expr2 = do
@@ -414,3 +435,21 @@ checkBoolExpr expr1 expr2 = do
     if (isBoolConvertible t1) && (isBoolConvertible t2) then
         return Bool
     else throwE (UnexpectedType t1 t2)
+
+-- Returns True if types are the same of right is subclass of left
+typesMatch :: Type -> Type -> Eval Bool
+typesMatch expected found = do
+    if expected == found then
+        return True
+    else case (expected, found) of
+        (Class anc, Class desc) -> isDescendant anc desc
+        _ -> return False
+
+isDescendant :: Ident -> Ident -> Eval Bool
+isDescendant anc desc = do
+    (parent, _, _) <- getClass desc
+    case parent of
+        (Just realParent) -> if realParent == anc then return True else isDescendant anc realParent
+        Nothing -> return False
+
+
