@@ -20,6 +20,15 @@ extractStringsTopDefs = concat . map (extractStringsTopDef)
 
 extractStringsTopDef :: TopDef -> [String]
 extractStringsTopDef (FnDef (FunDef _ _ _ (Block stmts))) = extractStringsStmts stmts
+extractStringsTopDef (ClassDef _ cdefs) = extractStringsCDefs cdefs
+extractStringsTopDef (ClassExtDef _ _ cdefs) = extractStringsCDefs cdefs
+
+extractStringsCDefs :: [CDef] -> [String]
+extractStringsCDefs = concat . map (extractStringsCDef)
+
+extractStringsCDef :: CDef -> [String]
+extractStringsCDef (Method funDef) = extractStringsTopDef (FnDef funDef)
+extractStringsCDef _ = []
 
 extractStringsStmts :: [Stmt] -> [String]
 extractStringsStmts = concat . map (extractStringsStmt)

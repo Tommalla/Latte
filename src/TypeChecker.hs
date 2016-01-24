@@ -17,12 +17,15 @@ import PrintLatte
 
 data TypecheckError = ExactError String | IdentNotFound Ident | UnexpectedRetType Type Type | UnexpectedType Type Type |
         ArgMismatch Type Arg | WrongArgsNo Int Int | NotNumeric Type | NotBoolConvertible Type | NotAnArray LVal |
-        IllegalStringArithmetic Expr | RetTypeMismatch Type Type | Redeclaration Ident
+        IllegalStringArithmetic Expr | RetTypeMismatch Type Type | Redeclaration Ident | UnknownClass Ident |
+        UnknownAttribute Ident Ident
     deriving (Eq)
 type FunType = (Env, Type, [Arg], Block)
+type ClsType = (Maybe Ident, Env, PEnv)
 type PEnv = Map.Map Ident FunType
 type Env = Map.Map Ident (Type, Int) -- Type, level of declaration
-type Eval a = ExceptT TypecheckError (State (Env, PEnv, Int)) a -- Env, PEnv, current block level
+type CEnv = Map.Map Ident ClsType
+type Eval a = ExceptT TypecheckError (State (Env, PEnv, CEnv, Int)) a -- Env, PEnv, Class Env, current block level
 
 instance Show TypecheckError where
     show (ExactError str) = str
@@ -43,19 +46,22 @@ instance Show TypecheckError where
     show (RetTypeMismatch expected found) = "Wrong return type. Expected '" ++ show expected ++ "', found '" ++
             show found ++ "'."
     show (Redeclaration ident) = "Tried to declare '" ++ show ident ++ "' for the second time in the same block."
+    show (UnknownClass ident) = "Unknown class: '" ++ show ident ++ "'."
+    show (UnknownAttribute clsName attrName) = "Unknown attribute '" ++ show attrName ++ "' of class '" ++
+            show clsName ++ "'."
 
 incLevel :: Eval ()
 incLevel = do
-    (env, penv, level) <- get
-    put (env, penv, level + 1)
+    (env, penv, cenv, level) <- get
+    put (env, penv, cenv, level + 1)
 
 getLevel :: Eval Int
 getLevel = do
-    (_, _, level) <- get
+    (_, _, _, level) <- get
     return level
 
 typeCheck :: Program -> Maybe String
-typeCheck program = case fst (runState (runExceptT (checkProgram program)) (Map.empty, Map.empty, 0)) of
+typeCheck program = case fst (runState (runExceptT (checkProgram program)) (Map.empty, Map.empty, Map.empty, 0)) of
     (Right _) -> Nothing
     (Left exc) -> case exc of
         (ExactError msg) -> Just msg
@@ -63,21 +69,79 @@ typeCheck program = case fst (runState (runExceptT (checkProgram program)) (Map.
 
 checkProgram :: Program -> Eval ()
 checkProgram (Program topDefs) = do
+    let fnDefs = filter (\topDef -> case topDef of
+            (FnDef _) -> True
+            _ -> False) topDefs
+    let clsDefs = filter (\topDef -> case topDef of
+            (FnDef _) -> False
+            _ -> True) topDefs
     mapM_ (\(t, name, args) -> registerFnDef t (Ident name) args (Block [Empty])) builtins
-    mapM_ (\(FnDef (FunDef retType ident args block)) -> registerFnDef retType ident args block) topDefs
+    mapM_ (\(FnDef (FunDef retType ident args block)) -> registerFnDef retType ident args block) fnDefs
+    mapM_ (\clsDef -> case clsDef of
+            (ClassDef ident cdefs) -> registerClassDef ident Nothing cdefs
+            (ClassExtDef ident parentIdent cdefs) -> registerClassDef ident (Just parentIdent) cdefs) clsDefs
     mapM_ (checkTopDef) topDefs
-    checkFnApp (Ident "main") []  -- TODO toplevel args still unsupported
+    checkFnApp (Ident "main") []  -- toplevel args are not supported
     return ()
 
 checkTopDef :: TopDef -> Eval ()
 checkTopDef (FnDef (FunDef retType ident args block)) = catchE (checkFnDef retType args block) (\exc ->
     throwE $ ExactError $ "In function '" ++ show ident ++ "': " ++ show exc)
+checkTopDef (ClassDef ident cdefs) = checkClassDefMeta ident Nothing cdefs
+checkTopDef (ClassExtDef ident parentIdent cdefs) = checkClassDefMeta ident (Just parentIdent) cdefs
 
 -- Registers the function in env.
 registerFnDef :: Type -> Ident -> [Arg] -> Block -> Eval ()
 registerFnDef retType ident args block = do
-    (env, penv, level) <- get
-    put $ (env, Map.insert ident (env, retType, args, block) penv, level)
+    (env, penv, cenv, level) <- get
+    put (env, Map.insert ident (env, retType, args, block) penv, cenv, level)
+
+registerClassDef :: Ident -> Maybe Ident -> [CDef] -> Eval ()
+registerClassDef ident parentIdent cdefs = do
+    (gEnv, gPEnv, gCEnv, level) <- get
+    let vars = filter (\cdef -> case cdef of
+            (Method _) -> False
+            _ -> True) cdefs
+    let methods = filter (\cdef -> case cdef of
+            (Method _) -> True
+            _ -> False) cdefs
+    -- FIXME: make below more sophisticated - check for redefinitions on the same level.
+    let cEnv = foldl (\env (Attr t citems) ->
+            foldl (\newEnv (ClassItem itemIdent) -> Map.insert itemIdent (t, level) newEnv) env citems) Map.empty vars
+    let cPEnv = foldl (\penv (Method (FunDef t fName args block)) -> Map.insert fName (gEnv, t, args, block) penv)
+            Map.empty methods
+    put (gEnv, gPEnv, Map.insert ident (parentIdent, cEnv, cPEnv) gCEnv, level)
+
+checkClassDefMeta :: Ident -> Maybe Ident -> [CDef] -> Eval ()
+checkClassDefMeta ident parentIdent cdefs = catchE (checkClassDef ident parentIdent cdefs) (\exc ->
+    throwE $ ExactError $ "In class definition for '" ++ show ident ++ "': " ++ show exc)
+
+checkClassDef :: Ident -> Maybe Ident -> [CDef] -> Eval ()
+checkClassDef ident parentIdent cdefs = do
+    -- FIXME: check for var redefinition with different type (from superclass)
+    -- All the vars have already been registered, we just need to check the functions
+    (classEnv, classPEnv) <- getClsEnv ident
+    let methods = filter (\cdef -> case cdef of
+            (Method _) -> True
+            _ -> False) cdefs
+    mapM_ (\(Method (FunDef retT fName args block)) -> do
+        (env, penv, cenv, level) <- get
+        put (classEnv, Map.union penv classPEnv, cenv, level + 1)
+        checkFnDef retT args block
+        put (env, penv, Map.insert ident (parentIdent, classEnv, classPEnv) cenv, level)) methods
+
+-- Returns a union of all envs up to the superclass
+getClsEnv :: Ident -> Eval (Env, PEnv)
+getClsEnv ident = do
+    (_, _, cenv, _) <- get
+    case Map.lookup ident cenv of
+        (Just (parent, env, penv)) -> do
+            case parent of
+                (Just parentIdent) -> do
+                    (parentEnv, parentPEnv) <- getClsEnv parentIdent
+                    return (Map.union env parentEnv, Map.union penv parentPEnv)
+                Nothing -> return (env, penv)
+        Nothing -> throwE $ UnknownClass ident
 
 -- Registers args of necessary type and checks block.
 checkFnDef :: Type -> [Arg] -> Block -> Eval ()
@@ -96,38 +160,45 @@ checkFnDef retType args block = do
 checkFnApp :: Ident -> [Type] -> Eval Type
 checkFnApp ident passedTypes = do
     (env, retType, args, block) <- getFunction ident
-    (oldEnv, penv, level) <- get
-    put (env, penv, level)
+    (oldEnv, penv, cenv, level) <- get
+    put (env, penv, cenv, level)
     bindArgs args passedTypes
-    put (oldEnv, penv, level)
+    put (oldEnv, penv, cenv, level)
     return retType
 
 getFunction :: Ident -> Eval FunType
 getFunction ident = do
-    (_, penv, _) <- get
+    (_, penv, _, _) <- get
     case Map.lookup ident penv of
         (Just fn) -> return fn
-        Nothing -> throwE (IdentNotFound ident)
+        Nothing -> throwE $ IdentNotFound ident
+
+getClass :: Ident -> Eval ClsType
+getClass ident = do
+    (_, _, cenv, _) <- get
+    case Map.lookup ident cenv of
+        (Just cls) -> return cls
+        Nothing -> throwE $ UnknownClass ident
 
 getType :: Ident -> Eval Type
 getType ident = do
-    (env, _, _) <- get
+    (env, _, _, _) <- get
     case Map.lookup ident env of
         (Just (t, _)) -> return t
-        Nothing -> throwE (IdentNotFound ident)
+        Nothing -> throwE $ IdentNotFound ident
 
 bindArgs :: [Arg] -> [Type] -> Eval ()
 bindArgs args passedTypes = do
     let (argsCnt, passedCnt) = (length args, length passedTypes)
     if argsCnt == passedCnt then
         mapM_ (\(arg, t) -> bindArg arg t) $ zip args passedTypes
-    else throwE (WrongArgsNo argsCnt passedCnt)
+    else throwE $ WrongArgsNo argsCnt passedCnt
 
 bindArg :: Arg -> Type -> Eval ()
 bindArg (Arg t ident) passedType = do
     if passedType == t then
         declare t ident
-    else throwE (ArgMismatch passedType (Arg t ident))
+    else throwE $ ArgMismatch passedType (Arg t ident)
 
 checkTopLevelBlock :: Block -> Eval Type
 checkTopLevelBlock block = do
@@ -239,7 +310,14 @@ getLValType (LValArrAcc (ArrElem lval expr)) = do
         case t of
             (Array resT) -> return resT
             _ -> throwE (NotAnArray lval)
-getLValType (LValAttr clsAttrAcc) = return Void -- TODO
+getLValType (LValAttr (AttrAcc lval ident)) = do
+    t <- getLValType lval
+    case t of
+        (Class cName) -> do
+            (_, cEnv, _) <- getClass cName
+            case Map.lookup ident cEnv of
+                (Just (resT, _)) -> return resT
+                Nothing -> throwE $ UnknownAttribute cName ident
 
 declareItem :: Type -> Item -> Eval ()
 declareItem t (NoInit ident) = declare t ident
@@ -251,7 +329,7 @@ declareItem t (Init ident expr) = do
 
 declare :: Type -> Ident -> Eval ()
 declare t ident = do
-    (env, penv, level) <- get
+    (env, penv, cenv, level) <- get
     let old = Map.lookup ident env
     let oldLevel = case old of
             (Just (_, oldLevel)) -> oldLevel
@@ -259,21 +337,23 @@ declare t ident = do
     if level == oldLevel then
         throwE $ Redeclaration ident
     else
-        put $ (Map.insert ident (t, level) env, penv, level)
+        put $ (Map.insert ident (t, level) env, penv, cenv, level)
 
 checkExpr :: Expr -> Eval Type
+checkExpr (ENullRef t) = return t
 checkExpr (EAttr (AttrAcc lval ident)) = do
     lvalT <- getLValType lval
     case lvalT of
         (Array t) -> case ident of
             (Ident "length") -> return Int
             _ -> throwE $ ExactError $ "Unsupported operation for array: " ++ (show (AttrAcc lval ident))
-        _ -> throwE $ ExactError "Classes not supported yet"
-checkExpr (ENewArr t _) = return (Array t)
+        _ -> getLValType $ LValAttr $ AttrAcc lval ident
 checkExpr (EArrElem arrElemAcc) = getLValType (LValArrAcc arrElemAcc)
 checkExpr (EVar ident) = do
     t <- getType ident
     return t
+checkExpr (ENewArr t _) = return $ Array t
+checkExpr (ENew ident) = return $ Class ident
 checkExpr (ELitInt _) = return Int
 checkExpr ELitTrue = return Bool
 checkExpr ELitFalse = return Bool
