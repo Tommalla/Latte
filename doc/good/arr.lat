@@ -26,6 +26,7 @@ int main() {
     int[] hardCore = prepArr(11);
     printArr(hardCore, 11);
     a = hardCore;
+    hardCore[1] = 2;
     printArr(a, 11);
     return 0;
 }
