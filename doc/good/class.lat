@@ -1,18 +1,25 @@
 class Foo {
     int bar;
-    Foo zaz;
-}
+    // Foo zaz;
 
-void a(Foo x) {
-    x.bar = 666;
+    int getBar() {
+        return self.bar;
+    }
+
+    void satan() {
+        self.bar = 666;
+        printInt(self.bar);
+    }
 }
 
 int main() {
     Foo foo = new Foo;
-    printInt(foo.bar);
+    // printInt(foo.bar);
+    // foo.bar = 1;
+    // printInt(foo.bar);
     foo.bar = 1;
+    foo.satan();
     printInt(foo.bar);
-    a(foo);
-    printInt(foo.bar);
+    printInt(foo.getBar());
     return 0;
 }

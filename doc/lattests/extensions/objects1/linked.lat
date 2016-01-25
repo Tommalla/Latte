@@ -41,7 +41,7 @@ int main() {
      s.push(i);
      i++;
    }
-     
+
    while (!s.isEmpty()) {
      printInt(s.top());
      s.pop();
