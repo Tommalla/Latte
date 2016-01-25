@@ -1,0 +1,18 @@
+class Foo {
+    int bar;
+    Foo zaz;
+}
+
+void a(Foo x) {
+    x.bar = 666;
+}
+
+int main() {
+    Foo foo = new Foo;
+    printInt(foo.bar);
+    foo.bar = 1;
+    printInt(foo.bar);
+    a(foo);
+    printInt(foo.bar);
+    return 0;
+}

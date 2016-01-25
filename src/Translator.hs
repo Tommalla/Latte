@@ -17,10 +17,14 @@ import StaticAnalyser (extractStrings)
 
 data Code = NoIndent String | Indent String | CodeBlock [Code] | Noop | EmptyLine
 data MetaOp = Mul MulOp | Add AddOp | Rel RelOp
+type ClsType =  (Maybe Ident, Env, Map.Map Ident (Type, Maybe Int), Int, Int) -- parent, Env, PEnv for classes -
+        -- we map every procedure to (retType, maybe id in vtable), the number of virtual methods (initially -1), the
+        -- alignment size
 type Env = Map.Map Ident (Type, Int)
 type SEnv = Map.Map String String  -- Maps string to its label
 type PEnv = Map.Map Ident Type -- Maps procedures to returned type
-type Translation a = State (Env, SEnv, PEnv, Int, Int, Int) a  -- Env, -Local stack size, Max label number
+type CEnv = Map.Map Ident ClsType
+type Translation a = State (Env, SEnv, PEnv, CEnv, Int, Int, Int) a  -- Env, -Local stack size, Max label number
 
 instance Show Code where
     show (NoIndent str) = str
@@ -32,13 +36,15 @@ instance Show Code where
 
 translate :: Program -> String
 translate program = (".globl main\n\n" ++
-        (show $ fst (runState (translateProgram program) (Map.empty, Map.empty, Map.empty, 0, 0, 0))) ++ "\n")
+        (show $ fst (runState (translateProgram program) (Map.empty, Map.empty, Map.empty, Map.empty, 0, 0, 0))) ++
+                "\n")
 
 -- Top-level translation -----------------------------------------------------------------------------------------------
 
 translateProgram :: Program -> Translation Code
 translateProgram (Program topDefs) = do
     fillPEnv (Program topDefs)
+    fillCEnv (Program topDefs)
     strings <- stringsData (Program topDefs)
     res <- mapM (translateTopDef) topDefs
     return $ CodeBlock [strings, EmptyLine, CodeBlock res]
@@ -46,11 +52,11 @@ translateProgram (Program topDefs) = do
 translateTopDef :: TopDef -> Translation Code
 translateTopDef (FnDef (FunDef t ident args block)) = do
     let header = NoIndent $ (unpackIdent ident) ++ ":"
-    (env, senv, penv, minSize, _, maxTemp) <- get
+    (env, senv, penv, cenv, minSize, _, maxTemp) <- get
     bindArgs args
     blockCode <- translateBlock block
-    (_, _, _, _, nextLabel, _) <- get
-    put (env, senv, penv, minSize, nextLabel, maxTemp)
+    (_, _, _, _, _, nextLabel, _) <- get
+    put (env, senv, penv, cenv, minSize, nextLabel, maxTemp)
     let (Block stmts) = block
     let doRet = if null stmts then True else
             case last stmts of
@@ -61,6 +67,15 @@ translateTopDef (FnDef (FunDef t ident args block)) = do
             then [header, entryProtocol, blockCode, leaveProtocol]
             else [header, entryProtocol, blockCode]
     return $ CodeBlock codeList
+translateTopDef (ClassDef (Ident cName) cdefs) = do
+    let methods = filter (\cdef -> case cdef of
+            (Method _) -> True
+            _ -> False) cdefs
+    code <- mapM (\(Method (FunDef t (Ident fName) args block)) ->
+            translateTopDef (FnDef $ FunDef t (Ident $ cName ++ "$" ++ fName) args block)) methods
+    return $ CodeBlock code
+translateTopDef (ClassExtDef ident _ cdefs) = translateTopDef (ClassDef ident cdefs)  -- Inheritance matters only for
+                                                                                      -- env.
 
 translateBlock :: Block -> Translation Code
 translateBlock (Block stmts) = do
@@ -76,13 +91,13 @@ translateBlock (Block stmts) = do
 translateStmt :: Stmt -> Translation Code
 translateStmt Empty = return Noop
 translateStmt (BStmt (Block stmts)) = do
-    (env, penv, senv, minSize, _, maxTemp) <- get
+    (env, penv, senv, cenv, minSize, _, maxTemp) <- get
     res <- mapM (translateStmt) stmts
-    (_, _, _, _, nextLabel, _) <- get
-    put (env, penv, senv, minSize, nextLabel, maxTemp)
+    (_, _, _, _, _, nextLabel, _) <- get
+    put (env, penv, senv, cenv, minSize, nextLabel, maxTemp)
     return $ CodeBlock res
 translateStmt (Decl t items) = do
-    (_, _, _, size, _, _) <- get
+    (_, _, _, _, size, _, _) <- get
     (_, res) <- allocItems size t items
     return res
 translateStmt (Ass lval expr) = do
@@ -139,8 +154,8 @@ translateStmt (While expr stmt) = do
     return $ CodeBlock [getLabelCode lBegin, exprCode, getLabelCode lLoop, stmtCode, jmp $ getLabel lBegin,
                         getLabelCode lExit]
 translateStmt (For t ident array stmt) = do
-    (env, penv, senv, minSize, prevNextLabel, maxTemp) <- get
-    put (env, penv, senv, minSize, prevNextLabel, maxTemp + 1)
+    (env, penv, senv, cenv, minSize, prevNextLabel, maxTemp) <- get
+    put (env, penv, senv, cenv, minSize, prevNextLabel, maxTemp + 1)
     let tempCnt = Ident $ "$" ++ (show maxTemp)
     res <- translateStmt $ BStmt $ Block [
             Decl Int [NoInit tempCnt], -- Declare temp counter
@@ -148,8 +163,8 @@ translateStmt (For t ident array stmt) = do
                     Decl t [Init ident $ EArrElem $ ArrElem array $ EVar tempCnt], -- ident = array[temp]
                     stmt,  -- code
                     Incr $ LValVal tempCnt]] -- temp ++
-    (_, _, _, _, nextLabel, _) <- get
-    put (env, penv, senv, minSize, nextLabel, maxTemp)
+    (_, _, _, _, _, nextLabel, _) <- get
+    put (env, penv, senv, cenv, minSize, nextLabel, maxTemp)
     return res
 translateStmt (SExp expr) = translateExpr expr
 
@@ -157,16 +172,22 @@ translateStmt (SExp expr) = translateExpr expr
 
 -- Invariant: Every expression ends with pushing the result on the stack
 translateExpr :: Expr -> Translation Code
+translateExpr (ENullRef t) = return $ CodeBlock [pushl "$0"]
 translateExpr (EAttr (AttrAcc lval ident)) = do
     lvalCode <- translateLVal lval
     t <- getLValType lval
     case t of
         (Array _) -> return $ CodeBlock [lvalCode, popl eax, pushl "4(%eax)"]  -- Array length
-        _ -> undefined -- TODO [classes]
+        _ -> do
+            lvalCode <- translateLVal $ LValAttr $ AttrAcc lval ident
+            return $ CodeBlock [lvalCode, popl eax, pushl "(%eax)"]
 translateExpr (ENewArr t expr) = do
     exprCode <- translateExpr expr
     return $ CodeBlock [pushl $ "$" ++ (show $ getSize t), exprCode, call $ Ident "calloc", popl ebx, popl ecx,
                         pushl ebx, pushl eax]
+translateExpr (ENew ident) = do
+    (_, _, _, _, align) <- getClass ident
+    return $ CodeBlock [pushl "$4", pushl $ "$" ++ (show align), call $ Ident "calloc", popl ebx, popl ebx, pushl eax]
 translateExpr (EArrElem arrElem) = do
     lvalCode <- translateLVal (LValArrAcc arrElem)
     return $ CodeBlock [lvalCode, popl eax, pushl "(%eax)"]
@@ -302,7 +323,13 @@ translateLVal (LValArrAcc (ArrElem lval expr)) = do
     exprCode <- translateExpr expr
     return $ CodeBlock [lvalCode, exprCode, popl eax, popl ebx, movl "(%ebx)" ecx,
                         Indent $ "leal (%ecx, %eax, 4), " ++ ebx, pushl ebx]    -- Single ref
-translateLVal (LValAttr (AttrAcc lval ident)) = undefined -- TODO (classes)
+translateLVal (LValAttr (AttrAcc lval ident)) = do
+    (Class cIdent) <- getLValType lval
+    lvalCode <- translateLVal lval
+    (_, env, _, _, _) <- getClass cIdent
+    let varMove = snd $ env Map.! ident
+    return $ CodeBlock [lvalCode, popl eax, movl "(%eax)" ebx, Indent $ "leal " ++ show varMove ++ "(%ebx), %eax",
+                        pushl eax]
 translateLVal _ = undefined -- TODO
 
 -- Declaration/args ----------------------------------------------------------------------------------------------------
@@ -316,11 +343,11 @@ bindArgs args = do
     bindArgsHelper :: Int -> [Arg] -> Translation Int
     bindArgsHelper lastSize ((Arg t ident):rest) = do
         let allocSize = getSize t
-        (env, senv, penv, minSize, nextLabel, maxTemp) <- get
+        (env, senv, penv, cenv, minSize, nextLabel, maxTemp) <- get
         let addr = lastSize + allocSize - (case t of
                 (Array _) -> 4
                 _ -> 0)
-        put (Map.insert ident (t, addr) env, senv, penv, minSize, nextLabel, maxTemp)
+        put (Map.insert ident (t, addr) env, senv, penv, cenv, minSize, nextLabel, maxTemp)
         bindArgsHelper (lastSize + allocSize) rest
     bindArgsHelper res [] = return res
 
@@ -362,8 +389,9 @@ allocItem lastSize t item = do
     initExpr <- getInitExpr t item
     exprCode <- translateExpr initExpr
     let ident = getItemIdent item
-    (env, senv, penv, minSize, nextLabel, maxTemp) <- get
-    put (Map.insert ident (t, (lastSize - size)) env, senv, penv, min minSize (lastSize - size), nextLabel, maxTemp)
+    (env, senv, penv, cenv, minSize, nextLabel, maxTemp) <- get
+    put (Map.insert ident (t, (lastSize - size)) env, senv, penv, cenv, min minSize (lastSize - size), nextLabel,
+         maxTemp)
     varCode <- getVarCode ident
     -- if array - store it's size
     code <- case t of
@@ -384,12 +412,16 @@ getInitExpr _ (Init _ expr) = return expr
 -- Type arithmetic for the purpose of translation ----------------------------------------------------------------------
 
 getExprType :: Expr -> Translation Type
-getExprType (ENewArr t _) = return (Array t)
+getExprType (ENullRef t) = return t
 getExprType (EAttr (AttrAcc lval ident)) = do
     lvalT <- getLValType lval
     case lvalT of
-        (Array _) -> return Int -- typechecker has already checked if ident is length
-        _ -> undefined -- TODO: classes
+        (Array _) -> return Int -- typechecker has already checked if ident is "length"
+        (Class cIdent) -> do
+            (_, env, _, _, _) <- getClass cIdent
+            return $ fst $ env Map.! ident
+getExprType (ENewArr t _) = return (Array t)
+getExprType (ENew ident) = return (Class ident)
 getExprType (EArrElem arrElemAcc) = getLValType (LValArrAcc arrElemAcc)
 getExprType (EVar ident) = getVarType ident
 getExprType (ELitInt _) = return Int
@@ -408,7 +440,7 @@ getExprType (EOr _ _) = return Bool
 
 getFnRetType :: Ident -> Translation Type
 getFnRetType ident = do
-    (_, _, penv, _, _, _) <- get
+    (_, _, penv, _, _, _, _) <- get
     return $ penv Map.! ident
 
 getLValType :: LVal -> Translation Type
@@ -436,13 +468,65 @@ fillPEnv (Program topDefs) = do
     where
     registerFunc :: FuncDef -> Translation ()
     registerFunc (FunDef retType ident _ _) = do
-        (env, senv, penv, minSize, nextLabel, maxTemp) <- get
-        put (env, senv, Map.insert ident retType penv, minSize, nextLabel, maxTemp)
+        (env, senv, penv, cenv, minSize, nextLabel, maxTemp) <- get
+        put (env, senv, Map.insert ident retType penv, cenv, minSize, nextLabel, maxTemp)
+
+fillCEnv :: Program -> Translation ()
+fillCEnv (Program topDefs) = do
+    let classDefs = map (\classDef -> case classDef of
+            (ClassDef ident cdefs) -> (Nothing, ident, cdefs)
+            (ClassExtDef ident parentIdent cdefs) -> (Just parentIdent, ident, cdefs)) $
+            filter (\td -> case td of
+                    (FnDef _) -> False
+                    _ -> True) topDefs
+    mapM_ (registerClass) classDefs
+    let cdefsEnv = Map.fromList $ map (\(_, ident, cdefs) -> (ident, cdefs)) classDefs
+    mapM_ (\(_, ident, _) -> initClass (Just ident) cdefsEnv) classDefs
+    where
+    registerClass :: (Maybe Ident, Ident, [CDef]) -> Translation ()
+    registerClass (parentIdent, ident, cdefs) = do
+        -- Register class in CEnv
+        (env, senv, penv, cenv, minSize, nextLabel, maxTemp) <- get
+        put (env, senv, penv, Map.insert ident (parentIdent, Map.empty, Map.empty, -1, 0) cenv, minSize, nextLabel,
+             maxTemp)
+    -- This function is responsible for setting env properly and initializing virtual method numbers
+    initClass :: Maybe Ident -> Map.Map Ident [CDef] -> Translation (Env, Int)
+    initClass (Just ident) cdefsEnv = do
+        -- Initiate Env and sum with parent's
+        (parent, cEnv, cPEnv, maxVirt, align) <- getClass ident
+        if maxVirt > -1 then return (cEnv, align)
+        else do
+            (superEnv, lastSize) <- initClass parent cdefsEnv
+            let cdefs = cdefsEnv Map.! ident
+            let vars = filter (\cdef -> case cdef of
+                    (Method _) -> False
+                    _ -> True) cdefs
+            let methods = filter (\cdef -> case cdef of
+                    (Method _) -> True
+                    _ -> False) cdefs
+            let (resEnv, resSize) = foldl (\(cEnv, size) (Attr t classItems) -> let tSize = getSize t in
+                    foldl (\(newEnv, newSize) (ClassItem ident) ->
+                            (Map.insert ident (t, newSize + tSize) newEnv, newSize + tSize)) (cEnv, size) classItems)
+                    (superEnv, lastSize) cdefs
+            -- TODO: Methods
+            -- Get parent's PEnv and for every new method look it up. If it exists as non-virtual, make it virtual and
+            -- give it new virtIdx; if it exists as virtual, do not readd, if does not exist, add as non-virtual.
+            (env, senv, penv, cenv, minSize, nextLabel, maxTemp) <- get
+            put (env, senv, penv, Map.insert ident (parent, resEnv, cPEnv, 0, resSize) cenv, minSize, nextLabel,
+                 maxTemp)
+            return (resEnv, resSize)
+    initClass Nothing _ = return (Map.empty, 4)  -- 4 bytes for vptr
+
+
+getClass :: Ident -> Translation ClsType
+getClass ident = do
+    (_, _, _, cenv, _, _, _) <- get
+    return $ cenv Map.! ident
 
 getNextLabel :: Translation Int
 getNextLabel = do
-    (env, senv, penv, minSize, nextLabel, maxTemp) <- get
-    put (env, senv, penv, minSize, nextLabel + 1, maxTemp)
+    (env, senv, penv, cenv, minSize, nextLabel, maxTemp) <- get
+    put (env, senv, penv, cenv, minSize, nextLabel + 1, maxTemp)
     return nextLabel
 
 getVarCode :: Ident -> Translation String
@@ -456,12 +540,12 @@ getVarCodeOffset ident offset = do
 getVarIdx :: Ident -> Translation Int
 -- getVarIdx ident | trace ("getVarIdx " ++ show ident) False = undefined
 getVarIdx ident = do
-    (env, _, _, _, _, _) <- get
+    (env, _, _, _, _, _, _) <- get
     return $ snd $ env Map.! ident
 
 getVarType :: Ident -> Translation Type
 getVarType ident = do
-    (env, _, _, _, _, _) <- get
+    (env, _, _, _, _, _, _) <- get
     return $ fst $ env Map.! ident
 
 -- Strings / string labels ---------------------------------------------------------------------------------------------
@@ -482,14 +566,14 @@ storeString str = do
 
 getStringLabel :: String -> Translation String
 getStringLabel str = do
-    (_, senv, _, _, _, _) <- get
+    (_, senv, _, _, _, _, _) <- get
     return $ senv Map.! str
 
 registerString :: String -> Int -> Translation ()
 registerString str idx = do
-    (env, senv, penv, minSize, nextLabel, maxTemp) <- get
+    (env, senv, penv, cenv, minSize, nextLabel, maxTemp) <- get
     let sLabel = ".S" ++ (show idx)
-    put (env, Map.insert str sLabel senv, penv, minSize, nextLabel, maxTemp)
+    put (env, Map.insert str sLabel senv, penv, cenv, minSize, nextLabel, maxTemp)
 
 -- Utils ---------------------------------------------------------------------------------------------------------------
 
@@ -509,7 +593,8 @@ getSize Int = 4
 getSize Bool = 4    -- Yes, let's use ints for now for consistency [FIXME]
 getSize Str = 4     -- Ptr to actual string
 getSize (Array _) = 8  -- Ptr to allocated space + size
-getSize _ = 0   -- TODO
+getSize (Class _) = 4   -- Ptr to allocated space
+getSize _ = 0
 
 toBlock :: Stmt -> Stmt
 toBlock (BStmt block) = BStmt block
