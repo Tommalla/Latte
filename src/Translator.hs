@@ -220,7 +220,7 @@ translateExpr (EMethApp (MethApp lval (FnApp ident exprs))) = do
     let popPush = if retType /= Void then [popl ebx, popl ebx, pushl eax] else [popl ebx]
     case virt of
         (Just virtId) -> do
-            appCode <- getFnAppCode retType (Ident $ "*" ++ (show virtId) ++ "(%edx)") exprs
+            appCode <- getFnAppCode retType (Ident $ "*" ++ (show (4 * virtId)) ++ "(%edx)") exprs
             return $ CodeBlock [lvalCode, popl eax, movl "(%eax)" ebx, movl "(%ebx)" edx, pushl "(%eax)", appCode, CodeBlock popPush]
         Nothing -> do
             appCode <- getFnAppCode retType (Ident $ (unpackIdent origCls) ++ "$" ++ (unpackIdent ident)) exprs
@@ -537,8 +537,9 @@ fillCEnv (Program topDefs) = do
     (_, _, _, cenv, _, _, _) <- get
     let cdefsEnv = Map.fromList $ map (\(_, ident, cdefs) -> (ident, cdefs)) classDefs
     let cIdents = map (\(_, ident, _) -> ident) classDefs
-    mapM_ (\ident -> initClass (Just ident) Set.empty cdefsEnv) $
-            filter (\ident -> not $ any (\(parent, _, _, _, _) -> parent == (Just ident)) $ Map.elems cenv) cIdents
+    let leaves = filter (\ident -> not $ any (\(parent, _, _, _, _) -> parent == (Just ident)) $ Map.elems cenv) cIdents
+    mapM_ (\ident -> initClass (Just ident) Set.empty cdefsEnv) leaves
+
     where
     registerClass :: (Maybe Ident, Ident, [CDef]) -> Translation ()
     registerClass (parentIdent, ident, cdefs) = do
@@ -546,6 +547,7 @@ fillCEnv (Program topDefs) = do
         (env, senv, penv, cenv, minSize, nextLabel, maxTemp) <- get
         put (env, senv, penv, Map.insert ident (parentIdent, Map.empty, Map.empty, -1, 0) cenv, minSize, nextLabel,
              maxTemp)
+
     -- This function is responsible for setting env properly and initializing virtual method numbers
     initClass :: Maybe Ident -> Set.Set Ident -> Map.Map Ident [CDef] -> Translation (Env, Int)
     -- initClass cls pset _ | trace ("initClass " ++ show cls ++ " pset: " ++ show pset) False = undefined
@@ -577,10 +579,9 @@ fillCEnv (Program topDefs) = do
                     case Map.lookup fIdent cPEnv of
                             (Just (_, Nothing, _)) -> (Map.insert fIdent (t, Just maxVirt, ident) cPEnv,
                                                        maxVirt + 1)
-                            Nothing -> (if Set.member fIdent pset then
-                                (Map.insert fIdent (t, Just maxVirt, ident) cPEnv, maxVirt + 1)
-                                else (Map.insert fIdent (t, Nothing, ident) cPEnv, maxVirt))
-                            (Just (_, v, _)) -> (Map.insert fIdent (t, v, ident) cPEnv, maxVirt)) (superPEnv, superMaxVirt) methods
+                            Nothing -> (Map.insert fIdent (t, Just maxVirt, ident) cPEnv, maxVirt + 1)
+                            (Just (_, v, _)) -> (Map.insert fIdent (t, v, ident) cPEnv, maxVirt))
+                                    (superPEnv, superMaxVirt) methods
             -- Get parent's PEnv and for every new method look it up. If it exists as non-virtual, make it virtual and
             -- give it new virtIdx; if it exists as virtual, do not readd, if does not exist, add as non-virtual.
             (env, senv, penv, cenv, minSize, nextLabel, maxTemp) <- get
