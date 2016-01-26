@@ -4,6 +4,7 @@ module Translator where
 
 import Control.Monad.State
 import Data.List
+import Data.Maybe
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 import Debug.Trace (trace)
@@ -17,6 +18,7 @@ import PrintLatte
 import StaticAnalyser (extractStrings)
 
 data Code = NoIndent String | Indent String | CodeBlock [Code] | Noop | EmptyLine
+    deriving (Eq)
 data MetaOp = Mul MulOp | Add AddOp | Rel RelOp
 type ClsType =  (Maybe Ident, Env, Map.Map Ident (Type, Maybe Int, Ident), Int, Int) -- parent, Env, PEnv for classes -
         -- we map every procedure to (retType, maybe id in vtable), the number of virtual methods (initially -1), the
@@ -37,8 +39,7 @@ instance Show Code where
 
 translate :: Program -> String
 translate program = (".globl main\n\n" ++
-        (show $ fst (runState (translateProgram program) (Map.empty, Map.empty, Map.empty, Map.empty, 0, 0, 0))) ++
-                "\n")
+        (show $ fst (runState (translateProgram program) (Map.empty, Map.empty, Map.empty, Map.empty, 0, 0, 0))) ++ "\n")
 
 -- Top-level translation -----------------------------------------------------------------------------------------------
 
@@ -46,9 +47,28 @@ translateProgram :: Program -> Translation Code
 translateProgram (Program topDefs) = do
     fillPEnv (Program topDefs)
     fillCEnv (Program topDefs)
+    vTablesCode <- prepVTables
     strings <- stringsData (Program topDefs)
     res <- mapM (translateTopDef) topDefs
-    return $ CodeBlock [strings, EmptyLine, CodeBlock res]
+    vTables <- prepVTables
+    return $ CodeBlock [strings, vTables, EmptyLine, CodeBlock res]
+
+prepVTables :: Translation Code
+prepVTables = do
+    (_, _, _, cenv, _, _, _) <- get
+    code <- mapM (prepVTable . fst) $ Map.toList cenv
+    return $ CodeBlock $ filter (\c -> c /= EmptyLine) code
+
+prepVTable :: Ident -> Translation Code
+prepVTable ident = do
+    (_, _, penv, _, _) <- getClass ident
+    let virt = map (\(fName, (_, v, cName)) -> (fromJust v, (unpackIdent cName) ++ "$" ++ (unpackIdent fName))) $
+            filter (\(fName, (_, v, _)) -> isJust v) $ Map.toList penv
+    let virtOrd = sort virt
+    let arr = foldl (\acc (_, e) -> acc ++ "," ++ e) "" virtOrd
+    if not $ null arr then
+        return $ NoIndent $ (getVTableName ident) ++ ": .int " ++ (tail arr)
+    else return EmptyLine
 
 translateTopDef :: TopDef -> Translation Code
 translateTopDef (FnDef (FunDef t ident args block)) = do
@@ -197,10 +217,12 @@ translateExpr (EMethApp (MethApp lval (FnApp ident exprs))) = do
     (Class cIdent) <- getLValType lval
     (_, _, penv, _, _) <- getClass cIdent
     let (retType, virt, origCls) = penv Map.! ident
+    let popPush = if retType /= Void then [popl ebx, popl ebx, pushl eax] else [popl ebx]
     case virt of
-        (Just virtId) -> return $ CodeBlock [lvalCode, Indent "TODO", popl ebx] -- TODO
+        (Just virtId) -> do
+            appCode <- getFnAppCode retType (Ident $ "*" ++ (show virtId) ++ "(%edx)") exprs
+            return $ CodeBlock [lvalCode, popl eax, movl "(%eax)" ebx, movl "(%ebx)" edx, pushl "(%eax)", appCode, CodeBlock popPush]
         Nothing -> do
-            let popPush = if retType /= Void then [popl ebx, popl ebx, pushl eax] else [popl ebx]
             appCode <- getFnAppCode retType (Ident $ (unpackIdent origCls) ++ "$" ++ (unpackIdent ident)) exprs
             return $ CodeBlock [lvalCode, popl eax, pushl "(%eax)", appCode, CodeBlock popPush]
     -- If for this class, this method is virtual then call using vptr
@@ -211,7 +233,10 @@ translateExpr (ENewArr t expr) = do
                         pushl ebx, pushl eax]
 translateExpr (ENew ident) = do
     (_, _, _, _, align) <- getClass ident
-    return $ CodeBlock [pushl "$4", pushl $ "$" ++ (show align), call $ Ident "calloc", popl ebx, popl ebx, pushl eax]
+    vTable <- hasVTable ident
+    let vPtr = if vTable then ("$" ++ getVTableName ident) else "$0"
+    return $ CodeBlock [pushl "$4", pushl $ "$" ++ (show align), call $ Ident "calloc", popl ebx, popl ebx,
+            movl vPtr "(%eax)", pushl eax]
 translateExpr (EArrElem arrElem) = do
     lvalCode <- translateLVal (LValArrAcc arrElem)
     return $ CodeBlock [lvalCode, popl eax, pushl "(%eax)"]
@@ -260,7 +285,8 @@ getFnAppCode retType ident args = do
     exprs <- mapM (translateExpr) args
     argsSize <- getArgsSize args
     let remParams = map (\_ -> popl ebx) [1..argsSize]
-    let commonCode = CodeBlock [CodeBlock exprs, call ident, CodeBlock remParams]
+    let commonCode = if not $ null args then (CodeBlock [CodeBlock exprs, call ident, CodeBlock remParams])
+                else (call ident)
     case retType of
         (Array _) -> return $ CodeBlock [commonCode, pushl edx, pushl eax]
         Void -> return commonCode
@@ -508,8 +534,11 @@ fillCEnv (Program topDefs) = do
                     (FnDef _) -> False
                     _ -> True) topDefs
     mapM_ (registerClass) classDefs
+    (_, _, _, cenv, _, _, _) <- get
     let cdefsEnv = Map.fromList $ map (\(_, ident, cdefs) -> (ident, cdefs)) classDefs
-    mapM_ (\(_, ident, _) -> initClass (Just ident) Set.empty cdefsEnv) classDefs
+    let cIdents = map (\(_, ident, _) -> ident) classDefs
+    mapM_ (\ident -> initClass (Just ident) Set.empty cdefsEnv) $
+            filter (\ident -> not $ any (\(parent, _, _, _, _) -> parent == (Just ident)) $ Map.elems cenv) cIdents
     where
     registerClass :: (Maybe Ident, Ident, [CDef]) -> Translation ()
     registerClass (parentIdent, ident, cdefs) = do
@@ -519,13 +548,11 @@ fillCEnv (Program topDefs) = do
              maxTemp)
     -- This function is responsible for setting env properly and initializing virtual method numbers
     initClass :: Maybe Ident -> Set.Set Ident -> Map.Map Ident [CDef] -> Translation (Env, Int)
+    -- initClass cls pset _ | trace ("initClass " ++ show cls ++ " pset: " ++ show pset) False = undefined
     initClass (Just ident) pset cdefsEnv = do
-        -- Initiate Env and sum with parent's
         (parent, cEnv, cPEnv, maxVirt, align) <- getClass ident
         if maxVirt > -1 then return (cEnv, align)
         else do
-            let newPSet = foldl (\acc (ident, _) -> Set.insert ident acc) Set.empty $ Map.toList cPEnv
-            (superEnv, lastSize) <- initClass parent newPSet cdefsEnv
             let cdefs = cdefsEnv Map.! ident
             let vars = filter (\cdef -> case cdef of
                     (Method _) -> False
@@ -533,6 +560,10 @@ fillCEnv (Program topDefs) = do
             let methods = filter (\cdef -> case cdef of
                     (Method _) -> True
                     _ -> False) cdefs
+            -- Sum all the methods below and our methods
+            let newPSet = foldl (\acc (Method (FunDef _ ident _ _)) -> Set.insert ident acc) pset $ methods
+            -- Get env and last env size of all classes above
+            (superEnv, lastSize) <- initClass parent newPSet cdefsEnv
             let (resEnv, resSize) = foldl (\(cEnv, size) (Attr t classItems) -> let tSize = getSize t in
                     foldl (\(newEnv, newSize) (ClassItem ident) ->
                             (Map.insert ident (t, newSize) newEnv, newSize + tSize)) (cEnv, size) classItems)
@@ -549,11 +580,11 @@ fillCEnv (Program topDefs) = do
                             Nothing -> (if Set.member fIdent pset then
                                 (Map.insert fIdent (t, Just maxVirt, ident) cPEnv, maxVirt + 1)
                                 else (Map.insert fIdent (t, Nothing, ident) cPEnv, maxVirt))
-                            _ -> (cPEnv, maxVirt)) (superPEnv, superMaxVirt) methods
+                            (Just (_, v, _)) -> (Map.insert fIdent (t, v, ident) cPEnv, maxVirt)) (superPEnv, superMaxVirt) methods
             -- Get parent's PEnv and for every new method look it up. If it exists as non-virtual, make it virtual and
             -- give it new virtIdx; if it exists as virtual, do not readd, if does not exist, add as non-virtual.
             (env, senv, penv, cenv, minSize, nextLabel, maxTemp) <- get
-            put (env, senv, penv, Map.insert ident (parent, resEnv, resPEnv, 0, resSize) cenv, minSize, nextLabel,
+            put (env, senv, penv, Map.insert ident (parent, resEnv, resPEnv, resMaxVirt, resSize) cenv, minSize, nextLabel,
                  maxTemp)
             return (resEnv, resSize)
     initClass Nothing _ _ = return (Map.empty, 4)  -- 4 bytes for vptr
@@ -603,6 +634,11 @@ getVarType ident = do
         return $ fst $ env Map.! ident
     else getExprType (EAttr (AttrAcc (LValVal (Ident "self")) ident))
 
+hasVTable :: Ident -> Translation Bool
+hasVTable cName = do
+    (_, _, penv, _, _) <- getClass cName
+    return $ not $ null $ filter (\(_, v, _) -> isJust v) $ Map.elems penv
+
 -- Strings / string labels ---------------------------------------------------------------------------------------------
 
 stringsData :: Program -> Translation Code
@@ -650,6 +686,9 @@ getSize Str = 4     -- Ptr to actual string
 getSize (Array _) = 8  -- Ptr to allocated space + size
 getSize (Class _) = 4   -- Ptr to allocated space
 getSize _ = 0
+
+getVTableName :: Ident -> String
+getVTableName (Ident str) = "." ++ str ++ "vTable"
 
 toBlock :: Stmt -> Stmt
 toBlock (BStmt block) = BStmt block
