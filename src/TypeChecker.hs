@@ -1,4 +1,4 @@
--- Tomasz Zakrzewski, tz336079, 2015
+-- Tomasz Zakrzewski, tz336079, 2015-2016
 -- This module is responsible for the static type checking.
 module TypeChecker where
 
@@ -422,7 +422,7 @@ checkArithmeticExpr :: Expr -> Expr -> Eval Type
 checkArithmeticExpr expr1 expr2 = do
     t1 <- checkExpr expr1
     t2 <- checkExpr expr2
-    if t1 == t2 then  -- TODO allow conversions
+    if t1 == t2 then  -- Conversions would go here if they were intended.
         if isNumeric t1 then
             return t1
         else throwE (NotNumeric t1)

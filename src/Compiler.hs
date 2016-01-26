@@ -1,4 +1,4 @@
--- Tomasz Zakrzewski, tz336079, 2015
+-- Tomasz Zakrzewski, tz336079, 2015-2016
 -- This module is responsible for running Translator and TypeChecker and actual underlying OS-related compilation.
 module Compiler where
 

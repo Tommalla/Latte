@@ -201,6 +201,25 @@ translateStmt (SExp expr) = translateExpr expr
 
 -- Expressions ---------------------------------------------------------------------------------------------------------
 
+getFnAppCode :: Type -> Ident -> [Expr] -> Translation Code
+getFnAppCode retType ident args = do
+    exprs <- mapM (translateExpr) args
+    argsSize <- getArgsSize args
+    let remParams = map (\_ -> popl ebx) [1..argsSize]
+    let commonCode = if not $ null args then (CodeBlock [CodeBlock exprs, call ident, CodeBlock remParams])
+                else (call ident)
+    case retType of
+        (Array _) -> return $ CodeBlock [commonCode, pushl edx, pushl eax]
+        Void -> return commonCode
+        _ -> return $ CodeBlock [commonCode, pushl eax]
+    where
+    getArgsSize :: [Expr] -> Translation Int
+    getArgsSize = foldM (\res arg -> do
+        t <- getExprType arg
+        return $ res + (case t of
+                (Array _) -> 2   -- Arrays are two 4-byte values on the stack
+                _ -> 1)) 0
+
 -- Invariant: Every expression ends with pushing the result on the stack
 translateExpr :: Expr -> Translation Code
 translateExpr (ENullRef t) = return $ CodeBlock [pushl "$0"]
@@ -221,7 +240,8 @@ translateExpr (EMethApp (MethApp lval (FnApp ident exprs))) = do
     case virt of
         (Just virtId) -> do
             appCode <- getFnAppCode retType (Ident $ "*" ++ (show (4 * virtId)) ++ "(%edx)") exprs
-            return $ CodeBlock [lvalCode, popl eax, movl "(%eax)" ebx, movl "(%ebx)" edx, pushl "(%eax)", appCode, CodeBlock popPush]
+            return $ CodeBlock [lvalCode, popl eax, movl "(%eax)" ebx, movl "(%ebx)" edx, pushl "(%eax)", appCode,
+                                CodeBlock popPush]
         Nothing -> do
             appCode <- getFnAppCode retType (Ident $ (unpackIdent origCls) ++ "$" ++ (unpackIdent ident)) exprs
             return $ CodeBlock [lvalCode, popl eax, pushl "(%eax)", appCode, CodeBlock popPush]
@@ -271,33 +291,6 @@ translateExpr expr = do
     exprCode <- translateBoolExpr expr lTrue lFalse
     return $ CodeBlock [exprCode, getLabelCode lTrue, pushl "$1", jmp $ getLabel lExit, getLabelCode lFalse, pushl "$0",
                         getLabelCode lExit]
-
-translateVar :: Ident -> Int -> Translation Code
-translateVar ident offset = do
-    (env, _, penv, _, _, _, _) <- get
-    if Map.member ident env then do
-        varCode <- getVarCodeOffset ident offset
-        return $ pushl varCode
-    else translateExpr (EAttr (AttrAcc (LValVal $ Ident "self") ident))
-
-getFnAppCode :: Type -> Ident -> [Expr] -> Translation Code
-getFnAppCode retType ident args = do
-    exprs <- mapM (translateExpr) args
-    argsSize <- getArgsSize args
-    let remParams = map (\_ -> popl ebx) [1..argsSize]
-    let commonCode = if not $ null args then (CodeBlock [CodeBlock exprs, call ident, CodeBlock remParams])
-                else (call ident)
-    case retType of
-        (Array _) -> return $ CodeBlock [commonCode, pushl edx, pushl eax]
-        Void -> return commonCode
-        _ -> return $ CodeBlock [commonCode, pushl eax]
-    where
-    getArgsSize :: [Expr] -> Translation Int
-    getArgsSize = foldM (\res arg -> do
-        t <- getExprType arg
-        return $ res + (case t of
-                (Array _) -> 2   -- Arrays are two 4-byte values on the stack
-                _ -> 1)) 0
 
 -- Translates a boolean expression
 translateBoolExpr :: Expr -> Int -> Int -> Translation Code
@@ -398,6 +391,14 @@ translateLVal (LValAttr (AttrAcc lval ident)) = do
     return $ CodeBlock [lvalCode, popl eax, movl "(%eax)" ebx, Indent $ "leal " ++ show varMove ++ "(%ebx), %eax",
                         pushl eax]
 translateLVal _ = undefined -- TODO
+
+translateVar :: Ident -> Int -> Translation Code
+translateVar ident offset = do
+    (env, _, penv, _, _, _, _) <- get
+    if Map.member ident env then do
+        varCode <- getVarCodeOffset ident offset
+        return $ pushl varCode
+    else translateExpr (EAttr (AttrAcc (LValVal $ Ident "self") ident))
 
 -- Declaration/args ----------------------------------------------------------------------------------------------------
 
